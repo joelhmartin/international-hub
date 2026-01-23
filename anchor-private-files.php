@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private Files
  * Description: Secure, modern private file manager with folders, role permissions, previews, WooCommerce product documents, account portal, and logging.
- * Version: 2.1.0
+ * Version: 2.9.01
  * Author: Anchor Corps
  */
 
