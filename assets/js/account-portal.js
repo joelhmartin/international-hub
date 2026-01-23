@@ -7,6 +7,7 @@ jQuery(function ($) {
     const $title = $root.find('[data-aap-title]');
 
     const $orders = $root.find('[data-aap-orders]');
+    const $downloads = $root.find('[data-aap-downloads]');
     const $drawer = $root.find('[data-aap-drawer]');
     const $drawerTitle = $root.find('[data-aap-drawer-title]');
     const $orderMeta = $root.find('[data-aap-order-meta]');
@@ -65,12 +66,13 @@ jQuery(function ($) {
         const titleMap = {
             account: AnchorAP.i18n.account || 'Account',
             orders: AnchorAP.i18n.orders || 'Orders',
-            files: AnchorAP.i18n.files || 'Downloads',
+            downloads: AnchorAP.i18n.downloads || 'Downloads',
             security: AnchorAP.i18n.security || 'Security',
         };
         $title.text(titleMap[tab] || (AnchorAP.i18n.account || 'Account'));
 
         if (tab === 'orders') loadOrders();
+        if (tab === 'downloads') loadDownloads();
     }
 
     function renderOrders(items) {
@@ -153,6 +155,7 @@ jQuery(function ($) {
     });
     $root.on('click', '[data-aap-action="refresh"]', function () {
         if (state.tab === 'orders') loadOrders();
+        if (state.tab === 'downloads') loadDownloads();
     });
     $root.on('click', '[data-aap-order]', function () {
         loadOrder($(this).data('aap-order'));
@@ -205,5 +208,35 @@ jQuery(function ($) {
 
     switchTab('account');
 
-    // Files tab is handled by the file manager script inside the panel; no extra JS needed here.
+    function loadDownloads() {
+        if (!$downloads.length) return;
+        $downloads.html('<div class="afm__skeleton afm__skeleton--share"></div>');
+        $.post(AnchorAP.ajax, {
+            action: 'anchor_pd_my_docs',
+            nonce: AnchorAP.nonce,
+        }).done(res => {
+            if (!res || !res.success) {
+                $downloads.html(`<div class="afm__empty">${esc(res && res.data && res.data.message ? res.data.message : 'Unable to load downloads.')}</div>`);
+                return;
+            }
+            const docs = res.data.docs || [];
+            if (!docs.length) {
+                $downloads.html('<div class="afm__empty">No downloads yet.</div>');
+                return;
+            }
+            $downloads.html(docs.map(d => `
+                <div class="afm__card">
+                    <div class="afm__cardIcon dashicons dashicons-media-document" aria-hidden="true"></div>
+                    <div class="afm__cardMain">
+                        <div class="afm__cardTitle">${esc(d.title)}</div>
+                        <div class="afm__cardSub">${esc(d.product)}${d.expires ? ' • Expires ' + esc(d.expires) : ''}</div>
+                    </div>
+                    <a class="afm__btn afm__btn--primary" href="${esc(d.downloadUrl)}">
+                        <span class="dashicons dashicons-download" aria-hidden="true"></span>
+                        Download
+                    </a>
+                </div>
+            `).join(''));
+        });
+    }
 });

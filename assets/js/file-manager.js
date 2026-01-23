@@ -203,7 +203,6 @@ jQuery(function ($) {
 
     function iconForMime(mime) {
         if (!mime) return 'media-default';
-        if (mime.indexOf('link/') === 0) return 'admin-links';
         if (mime.startsWith('image/')) return 'format-image';
         if (mime === 'application/pdf') return 'pdf';
         if (mime.startsWith('audio/')) return 'format-audio';
@@ -249,7 +248,7 @@ jQuery(function ($) {
                 <div class="afm__cardIcon dashicons dashicons-${iconForMime(f.mime)}" aria-hidden="true"></div>
                 <div class="afm__cardMain">
                     <div class="afm__cardTitle">${esc(f.name)}</div>
-                    <div class="afm__cardSub">${f.isLink ? `Link${f.linkHost ? ' • ' + esc(f.linkHost) : ''}` : `${esc(f.mime)} • ${fmtSize(f.size)}`}</div>
+                    <div class="afm__cardSub">${esc(f.mime)} • ${fmtSize(f.size)}</div>
                 </div>
                 ${canAdminAct ? `<button type="button" class="afm__kebab" data-afm-file-menu="${f.id}" aria-label="File actions">
                     <span class="dashicons dashicons-ellipsis" aria-hidden="true"></span>
@@ -402,20 +401,11 @@ jQuery(function ($) {
             const file = res.data.file;
             const prev = res.data.preview;
             const cap = res.data.capability;
-            const isLink = !!file.isLink;
 
             $drawerTitle.text(file.name);
 
             let previewHtml = '';
-            if (prev.type === 'link') {
-                previewHtml = `
-                    <div class="afm__noPreview">
-                        <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
-                        <div>External link</div>
-                        ${file.linkUrl ? `<div class="afm__help">${esc(file.linkUrl)}</div>` : ''}
-                    </div>
-                `;
-            } else if (prev.type === 'image') {
+            if (prev.type === 'image') {
                 previewHtml = `<img class="afm__imgPreview" src="${esc(prev.inlineUrl)}" alt="${esc(file.name)}">`;
             } else if (prev.type === 'pdf') {
                 previewHtml = `<iframe class="afm__pdfPreview" src="${esc(prev.inlineUrl)}" title="${esc(file.name)}"></iframe>`;
@@ -430,17 +420,16 @@ jQuery(function ($) {
             $preview.html(previewHtml);
 
             $meta.html(`
-                <div class="afm__metaRow"><div class="afm__metaKey">Type</div><div class="afm__metaVal">${isLink ? 'Link' : esc(file.mime)}</div></div>
-                <div class="afm__metaRow"><div class="afm__metaKey">Size</div><div class="afm__metaVal">${isLink ? '—' : fmtSize(file.size)}</div></div>
+                <div class="afm__metaRow"><div class="afm__metaKey">Type</div><div class="afm__metaVal">${esc(file.mime)}</div></div>
+                <div class="afm__metaRow"><div class="afm__metaKey">Size</div><div class="afm__metaVal">${fmtSize(file.size)}</div></div>
                 <div class="afm__metaRow"><div class="afm__metaKey">Uploaded</div><div class="afm__metaVal">${esc(file.createdAt)}</div></div>
-                ${isLink && file.linkUrl ? `<div class="afm__metaRow"><div class="afm__metaKey">URL</div><div class="afm__metaVal">${esc(file.linkUrl)}</div></div>` : ''}
             `);
 
             const canManage = capRank(cap) >= 3;
             $drawerActions.html(`
-                <a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}" ${isLink ? 'target="_blank" rel="noopener noreferrer"' : ''}>
-                    <span class="dashicons ${isLink ? 'dashicons-admin-links' : 'dashicons-download'}" aria-hidden="true"></span>
-                    ${isLink ? 'Open link' : esc(AnchorFM.i18n.download)}
+                <a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}">
+                    <span class="dashicons dashicons-download" aria-hidden="true"></span>
+                    ${esc(AnchorFM.i18n.download)}
                 </a>
                 ${canManage ? `<button type="button" class="afm__btn afm__btn--secondary" data-afm-action="permissions-file" data-afm-file="${file.id}">
                     <span class="dashicons dashicons-lock" aria-hidden="true"></span>
@@ -584,17 +573,6 @@ jQuery(function ($) {
             });
             return;
         }
-        if (state.modalMode === 'create-link') {
-            const name = String($modalBody.find('[data-afm-link-name]').val() || '').trim();
-            const url = String($modalBody.find('[data-afm-link-url]').val() || '').trim();
-            if (!url) return;
-            api('anchor_fm_add_link', { folder_id: state.currentFolderId, name, url }).done(res => {
-                if (!res || !res.success) return;
-                closeModal();
-                loadFolder(state.currentFolderId);
-            });
-            return;
-        }
         if (state.modalMode === 'noop-close') {
             closeModal();
             return;
@@ -638,24 +616,6 @@ jQuery(function ($) {
             if (n.children && n.children.length) stack.push.apply(stack, n.children);
         }
         return '';
-    }
-
-    function openLinkModal() {
-        $modalTitle.text('Add link');
-        $modalBody.html(`
-            <div class="afm__fieldRow">
-                <label class="afm__label">Link name</label>
-                <input type="text" class="afm__input" data-afm-link-name placeholder="Optional name">
-            </div>
-            <div class="afm__fieldRow">
-                <label class="afm__label">URL</label>
-                <input type="url" class="afm__input" data-afm-link-url placeholder="https://example.com/resource">
-                <div class="afm__help">Must start with http or https.</div>
-            </div>
-        `);
-        setModalPrimary('Save link', 'create-link', null);
-        openModal();
-        window.setTimeout(() => $modalBody.find('[data-afm-link-url]').trigger('focus'), 0);
     }
 
     $menu.on('click', '[data-afm-menu-action]', function () {
@@ -768,10 +728,6 @@ jQuery(function ($) {
 
     $root.on('click', '[data-afm-action="upload"]', function () {
         $fileInput.trigger('click');
-    });
-    $root.on('click', '[data-afm-action="add-link"]', function () {
-        if (capRank(state.currentCapability) < 2) return;
-        openLinkModal();
     });
     $fileInput.on('change', function () {
         uploadFiles(this.files);

@@ -1,48 +1,16 @@
 <?php
 /**
- * Plugin Name: Anchor Private Files
- * Description: Secure, modern private file manager with folders, role permissions, previews, WooCommerce product documents, account portal, and logging.
- * Version: 2.9.01
+ * Plugin Name: Anchor Private File Manager
+ * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
+ * Version: 2.1.8
  * Author: Anchor Corps
  */
 
-use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
-
 if (!defined('ABSPATH')) exit;
-
-define('WC_PD_PLUGIN_FILE', __FILE__);
-define('WC_PD_PLUGIN_DIR', plugin_dir_path(__FILE__));
-
-$wc_pd_puc_loader = WC_PD_PLUGIN_DIR . 'plugin-update-checker/plugin-update-checker.php';
-if (!class_exists(PucFactory::class) && file_exists($wc_pd_puc_loader)) {
-    require_once $wc_pd_puc_loader;
-}
-
-if (class_exists(PucFactory::class)) {
-    $wc_pd_update_checker = PucFactory::buildUpdateChecker(
-        'https://github.com/joelhmartin/international-hub/',
-        WC_PD_PLUGIN_FILE,
-        'anchor-private-files'
-    );
-    $wc_pd_update_checker->setBranch('main');
-
-    $wc_pd_token = $_ENV['GITHUB_ACCESS_TOKEN']
-        ?? getenv('GITHUB_ACCESS_TOKEN')
-        ?: (defined('GITHUB_ACCESS_TOKEN') ? GITHUB_ACCESS_TOKEN : null);
-
-    if ($wc_pd_token) {
-        $wc_pd_update_checker->setAuthentication($wc_pd_token);
-    }
-
-    $wc_pd_vcs = method_exists($wc_pd_update_checker, 'getVcsApi') ? $wc_pd_update_checker->getVcsApi() : null;
-    if ($wc_pd_vcs && method_exists($wc_pd_vcs, 'enableReleaseAssets')) {
-        $wc_pd_vcs->enableReleaseAssets();
-    }
-}
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.1.9';
+    const VERSION = '2.1.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
@@ -52,6 +20,7 @@ class Anchor_Private_File_Manager {
     private static $instance = null;
 
     public function __construct() {
+        add_shortcode('anchor_file_manager', [$this, 'render_file_manager']);
         add_shortcode('anchor_account_portal', [$this, 'render_account_portal']);
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
 
@@ -82,8 +51,6 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_pd_save_docs', [$this, 'ajax_pd_save_docs']);
         add_action('wp_ajax_anchor_pd_my_docs', [$this, 'ajax_pd_my_docs']);
         add_action('wp_ajax_anchor_pd_upload', [$this, 'ajax_pd_upload']);
-        add_action('wp_ajax_anchor_fm_add_link', [$this, 'ajax_add_link']);
-        add_filter('woocommerce_customer_get_downloadable_products', [$this, 'add_docs_to_downloads']);
 
         add_action('admin_menu', [$this, 'register_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
@@ -418,10 +385,6 @@ class Anchor_Private_File_Manager {
                                     <span class="dashicons dashicons-upload" aria-hidden="true"></span>
                                     <?php esc_html_e('Upload', 'anchor-private-file-manager'); ?>
                                 </button>
-                                <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-link">
-                                    <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
-                                    <?php esc_html_e('Add link', 'anchor-private-file-manager'); ?>
-                                </button>
                             </div>
                         </div>
                     </header>
@@ -432,7 +395,7 @@ class Anchor_Private_File_Manager {
                                 <div class="afm__dropzoneInner">
                                     <div class="afm__dropIcon dashicons dashicons-cloud-upload" aria-hidden="true"></div>
                                     <div class="afm__dropTitle"><?php esc_html_e('Drop files to upload', 'anchor-private-file-manager'); ?></div>
-                                    <div class="afm__dropHint"><?php esc_html_e('Or use the Upload / Add link buttons', 'anchor-private-file-manager'); ?></div>
+                                    <div class="afm__dropHint"><?php esc_html_e('Or use the Upload button', 'anchor-private-file-manager'); ?></div>
                                 </div>
                             </div>
                             <div class="afm__grid" data-afm-grid></div>
@@ -520,28 +483,28 @@ class Anchor_Private_File_Manager {
                 <aside class="afm__sidebar" aria-label="<?php esc_attr_e('Account navigation', 'anchor-private-file-manager'); ?>">
                     <div class="afm__brand">
                         <img class="afm__brandMark" src="https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png" aria-hidden="true"></img>
-                    <div class="afm__brandText">
-                        <div class="afm__brandTitle"><?php esc_html_e('My Account', 'anchor-private-file-manager'); ?></div>
-                        <div class="afm__brandSub"><?php echo esc_html(wp_get_current_user()->display_name); ?></div>
+                        <div class="afm__brandText">
+                            <div class="afm__brandTitle"><?php esc_html_e('My Account', 'anchor-private-file-manager'); ?></div>
+                            <div class="afm__brandSub"><?php echo esc_html(wp_get_current_user()->display_name); ?></div>
+                        </div>
                     </div>
-                </div>
-                <nav class="aap__nav" aria-label="<?php esc_attr_e('Sections', 'anchor-private-file-manager'); ?>">
-                    <button type="button" class="aap__navItem is-active" data-aap-tab="account">
-                        <span class="dashicons dashicons-admin-users" aria-hidden="true"></span>
-                        <?php esc_html_e('Account', 'anchor-private-file-manager'); ?>
-                    </button>
-                    <button type="button" class="aap__navItem" data-aap-tab="orders">
-                        <span class="dashicons dashicons-clipboard" aria-hidden="true"></span>
-                        <?php esc_html_e('Orders', 'anchor-private-file-manager'); ?>
-                    </button>
-                    <button type="button" class="aap__navItem" data-aap-tab="files">
-                        <span class="dashicons dashicons-portfolio" aria-hidden="true"></span>
-                        <?php esc_html_e('Downloads', 'anchor-private-file-manager'); ?>
-                    </button>
-                    <button type="button" class="aap__navItem" data-aap-tab="security">
-                        <span class="dashicons dashicons-shield" aria-hidden="true"></span>
-                        <?php esc_html_e('Security', 'anchor-private-file-manager'); ?>
-                    </button>
+                    <nav class="aap__nav" aria-label="<?php esc_attr_e('Sections', 'anchor-private-file-manager'); ?>">
+                        <button type="button" class="aap__navItem is-active" data-aap-tab="account">
+                            <span class="dashicons dashicons-admin-users" aria-hidden="true"></span>
+                            <?php esc_html_e('Account', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-aap-tab="orders">
+                            <span class="dashicons dashicons-clipboard" aria-hidden="true"></span>
+                            <?php esc_html_e('Orders', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-aap-tab="downloads">
+                            <span class="dashicons dashicons-download" aria-hidden="true"></span>
+                            <?php esc_html_e('Downloads', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-aap-tab="security">
+                            <span class="dashicons dashicons-shield" aria-hidden="true"></span>
+                            <?php esc_html_e('Security', 'anchor-private-file-manager'); ?>
+                        </button>
                         <a class="aap__navItem aap__navItem--link" href="<?php echo esc_url(wp_logout_url(home_url('/'))); ?>">
                             <span class="dashicons dashicons-exit" aria-hidden="true"></span>
                             <?php esc_html_e('Log out', 'anchor-private-file-manager'); ?>
@@ -567,8 +530,8 @@ class Anchor_Private_File_Manager {
                             <div class="aap__grid" data-aap-orders></div>
                         </div>
 
-                        <div class="aap__panel" data-aap-panel="files">
-                            <?php echo $this->render_file_manager(); ?>
+                        <div class="aap__panel" data-aap-panel="downloads">
+                            <div class="aap__grid" data-aap-downloads></div>
                         </div>
 
                         <div class="aap__panel" data-aap-panel="account">
@@ -664,11 +627,6 @@ class Anchor_Private_File_Manager {
     private function get_storage_dir() {
         $upload_dir = wp_upload_dir();
         return trailingslashit($upload_dir['basedir']) . 'anchor-private-files';
-    }
-
-    private function is_link_file($file_row) {
-        if (!$file_row || !isset($file_row->mime_type)) return false;
-        return strpos((string) $file_row->mime_type, 'link/') === 0;
     }
 
     private function get_file_path_on_disk($file_row) {
@@ -1072,14 +1030,13 @@ class Anchor_Private_File_Manager {
         $file_rows = [];
         if ($folder_id > 0) {
             $file_rows = $wpdb->get_results($wpdb->prepare(
-                "SELECT id, folder_id, original_name, stored_name, mime_type, size, uploader_user_id, created_at FROM {$files} WHERE folder_id = %d ORDER BY created_at DESC",
+                "SELECT id, folder_id, original_name, mime_type, size, uploader_user_id, created_at FROM {$files} WHERE folder_id = %d ORDER BY created_at DESC",
                 $folder_id
             ));
         }
         $file_list = [];
         foreach ((array) $file_rows as $r) {
             if (!$this->can_user_view_file($user_id, (int) $r->id)) continue;
-            $is_link = $this->is_link_file($r);
             $file_list[] = [
                 'id' => (int) $r->id,
                 'name' => $r->original_name,
@@ -1087,8 +1044,6 @@ class Anchor_Private_File_Manager {
                 'size' => (int) $r->size,
                 'uploadedBy' => !empty($r->uploader_user_id) ? (int) $r->uploader_user_id : 0,
                 'createdAt' => $r->created_at,
-                'isLink' => $is_link,
-                'linkHost' => $is_link ? (parse_url($r->stored_name, PHP_URL_HOST) ?: '') : '',
             ];
         }
 
@@ -1368,11 +1323,9 @@ class Anchor_Private_File_Manager {
         $file = $this->get_file_row($file_id);
         if (!$file) $this->json_error('Not found', 404);
 
-        if (!$this->is_link_file($file)) {
-            $path = $this->get_file_path_on_disk($file);
-            if (file_exists($path)) {
-                @unlink($path);
-            }
+        $path = $this->get_file_path_on_disk($file);
+        if (file_exists($path)) {
+            @unlink($path);
         }
 
         global $wpdb;
@@ -1400,28 +1353,26 @@ class Anchor_Private_File_Manager {
         $file = $this->get_file_row($file_id);
         if (!$file) $this->json_error('Not found', 404);
 
-        if (!$this->is_link_file($file)) {
-            $current_path = $this->get_file_path_on_disk($file);
-            if (!file_exists($current_path)) $this->json_error('File missing on disk', 404);
+        $current_path = $this->get_file_path_on_disk($file);
+        if (!file_exists($current_path)) $this->json_error('File missing on disk', 404);
 
-            self::ensure_upload_storage();
-            $target_dir = trailingslashit($this->get_storage_dir()) . $target_folder;
-            if (!file_exists($target_dir)) {
-                wp_mkdir_p($target_dir);
-                $htaccess = $target_dir . '/.htaccess';
-                if (!file_exists($htaccess)) {
-                    @file_put_contents($htaccess, "Deny from all\n");
-                }
-                $index = $target_dir . '/index.php';
-                if (!file_exists($index)) {
-                    @file_put_contents($index, "<?php\n// Silence is golden.\n");
-                }
+        self::ensure_upload_storage();
+        $target_dir = trailingslashit($this->get_storage_dir()) . $target_folder;
+        if (!file_exists($target_dir)) {
+            wp_mkdir_p($target_dir);
+            $htaccess = $target_dir . '/.htaccess';
+            if (!file_exists($htaccess)) {
+                @file_put_contents($htaccess, "Deny from all\n");
             }
+            $index = $target_dir . '/index.php';
+            if (!file_exists($index)) {
+                @file_put_contents($index, "<?php\n// Silence is golden.\n");
+            }
+        }
 
-            $dest = trailingslashit($target_dir) . $file->stored_name;
-            if (!@rename($current_path, $dest)) {
-                $this->json_error('Could not move file', 500);
-            }
+        $dest = trailingslashit($target_dir) . $file->stored_name;
+        if (!@rename($current_path, $dest)) {
+            $this->json_error('Could not move file', 500);
         }
 
         global $wpdb;
@@ -1549,7 +1500,6 @@ class Anchor_Private_File_Manager {
 
         foreach ($file_rows as $row) {
             if (!$this->can_user_view_file($user_id, (int) $row->id)) continue;
-            if ($this->is_link_file($row)) continue;
             $path = $this->get_file_path_on_disk($row);
             if (!file_exists($path) || !is_readable($path)) continue;
             $relative_parts = $this->build_folder_path_names((int) $row->folder_id);
@@ -1583,11 +1533,8 @@ class Anchor_Private_File_Manager {
 
         $mime = (string) $file->mime_type;
         $type = 'none';
-        $is_link = $this->is_link_file($file);
 
-        if ($is_link) {
-            $type = 'link';
-        } elseif (strpos($mime, 'image/') === 0) {
+        if (strpos($mime, 'image/') === 0) {
             $type = 'image';
         } elseif ($mime === 'application/pdf') {
             $type = 'pdf';
@@ -1596,7 +1543,7 @@ class Anchor_Private_File_Manager {
         }
 
         $nonce = wp_create_nonce('anchor_fm_stream_' . $file_id);
-        $inline_url = $is_link ? $file->stored_name : add_query_arg([
+        $inline_url = add_query_arg([
             'action' => 'anchor_fm_stream',
             'file_id' => $file_id,
             'disposition' => 'inline',
@@ -1628,8 +1575,6 @@ class Anchor_Private_File_Manager {
                 'size' => (int) $file->size,
                 'createdAt' => $file->created_at,
                 'uploadedBy' => !empty($file->uploader_user_id) ? (int) $file->uploader_user_id : 0,
-                'isLink' => $is_link,
-                'linkUrl' => $is_link ? $file->stored_name : '',
             ],
             'preview' => [
                 'type' => $type,
@@ -1668,35 +1613,24 @@ class Anchor_Private_File_Manager {
             exit;
         }
 
-        if ($this->is_link_file($file)) {
-            $url = esc_url_raw((string) $file->stored_name);
-            if (!$url) {
-                status_header(404);
-                exit;
-            }
-            $this->log_activity($user_id, 'open_link', 'file', $file_id, []);
-            wp_safe_redirect($url);
-            exit;
-        } else {
-            $path = $this->get_file_path_on_disk($file);
-            if (!file_exists($path) || !is_readable($path)) {
-                status_header(404);
-                exit;
-            }
-
-            $disp = $disposition === 'inline' ? 'inline' : 'attachment';
-            $filename = sanitize_file_name($file->original_name);
-
-            $this->log_activity($user_id, $disp === 'inline' ? 'preview_file' : 'download_file', 'file', $file_id, []);
-
-            nocache_headers();
-            header('Content-Type: ' . $file->mime_type);
-            header('Content-Length: ' . filesize($path));
-            header('Content-Disposition: ' . $disp . '; filename="' . $filename . '"');
-            header('X-Content-Type-Options: nosniff');
-            @readfile($path);
+        $path = $this->get_file_path_on_disk($file);
+        if (!file_exists($path) || !is_readable($path)) {
+            status_header(404);
             exit;
         }
+
+        $disp = $disposition === 'inline' ? 'inline' : 'attachment';
+        $filename = sanitize_file_name($file->original_name);
+
+        $this->log_activity($user_id, $disp === 'inline' ? 'preview_file' : 'download_file', 'file', $file_id, []);
+
+        nocache_headers();
+        header('Content-Type: ' . $file->mime_type);
+        header('Content-Length: ' . filesize($path));
+        header('Content-Disposition: ' . $disp . '; filename="' . $filename . '"');
+        header('X-Content-Type-Options: nosniff');
+        @readfile($path);
+        exit;
     }
 
     public function ajax_get_permissions() {
@@ -2158,61 +2092,7 @@ class Anchor_Private_File_Manager {
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
         if (!function_exists('wc_get_products')) $this->json_error('WooCommerce not available', 400);
 
-        $docs_out = $this->get_user_product_downloads(get_current_user_id());
-        $this->json_success(['docs' => $docs_out]);
-    }
-
-    /**
-     * Build document links for a WooCommerce order (for emails/exports).
-     */
-    public function get_order_documents_for_email($order) {
-        if (!is_a($order, 'WC_Order')) {
-            return [];
-        }
-
-        $docs = [];
-        $seen = [];
-        foreach ($order->get_items() as $item) {
-            if (!is_a($item, 'WC_Order_Item_Product')) continue;
-            $pid = $item->get_product_id();
-            $product_title = get_the_title($pid);
-            $product_docs = $this->get_product_docs($pid);
-            foreach ($product_docs as $doc) {
-                $fid = (int) $doc['fileId'];
-                if ($fid <= 0) continue;
-                if (isset($seen[$fid])) continue;
-                if ($this->doc_is_expired($doc['expires'])) continue;
-                $file = $this->get_file_row($fid);
-                if (!$file) continue;
-                $seen[$fid] = true;
-                $nonce = wp_create_nonce('anchor_fm_stream_' . $fid);
-                $url = add_query_arg([
-                    'action' => 'anchor_fm_stream',
-                    'file_id' => $fid,
-                    'disposition' => 'attachment',
-                    'nonce' => $nonce,
-                ], admin_url('admin-ajax.php'));
-                $docs[] = [
-                    'product' => $product_title,
-                    'label' => $doc['title'] ?: $file->original_name,
-                    'url' => $url,
-                    'expires' => $doc['expires'],
-                ];
-            }
-        }
-
-        return $docs;
-    }
-
-    /**
-     * Collect product documents a user can access (purchase-based).
-     */
-    private function get_user_product_downloads($user_id) {
-        $docs_out = [];
-        if (!function_exists('wc_get_products')) {
-            return $docs_out;
-        }
-
+        $user_id = get_current_user_id();
         $products = get_posts([
             'post_type' => 'product',
             'posts_per_page' => -1,
@@ -2220,6 +2100,7 @@ class Anchor_Private_File_Manager {
             'post_status' => 'publish',
         ]);
 
+        $docs_out = [];
         foreach ((array) $products as $p) {
             $pid = (int) $p->ID;
             if (!$this->user_has_product($user_id, $pid)) continue;
@@ -2246,7 +2127,7 @@ class Anchor_Private_File_Manager {
             }
         }
 
-        return $docs_out;
+        $this->json_success(['docs' => $docs_out]);
     }
 
     public function ajax_pd_upload() {
@@ -2306,111 +2187,7 @@ class Anchor_Private_File_Manager {
             'size' => $size,
         ]]);
     }
-
-    /**
-     * Add product documents to WooCommerce "My Account > Downloads".
-     */
-    public function add_docs_to_downloads($downloads) {
-        if (!is_user_logged_in()) return $downloads;
-        $user_id = get_current_user_id();
-        $docs = $this->get_user_product_downloads($user_id);
-        foreach ($docs as $doc) {
-            $downloads[] = [
-                'download_id'         => md5('pd|' . $doc['fileId']),
-                'product_id'          => (int) $doc['productId'],
-                'product_name'        => $doc['product'],
-                'download_name'       => $doc['title'],
-                'download_url'        => $doc['downloadUrl'],
-                'downloads_remaining' => '&#8734;',
-                'access_expires'      => !empty($doc['expires']) ? strtotime($doc['expires'] . ' 23:59:59') : null,
-            ];
-        }
-        return $downloads;
-    }
-
-    public function ajax_add_link() {
-        $this->require_nonce();
-        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
-
-        $user_id = get_current_user_id();
-        $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
-        $name = isset($_POST['name']) ? sanitize_text_field((string) $_POST['name']) : '';
-        $url = isset($_POST['url']) ? esc_url_raw((string) $_POST['url']) : '';
-
-        if ($folder_id <= 0 || $url === '') $this->json_error('Missing fields');
-        if (!$this->can_user_upload_to_folder($user_id, $folder_id)) $this->json_error('Forbidden', 403);
-
-        $parsed = wp_parse_url($url);
-        if (empty($parsed['scheme']) || !in_array(strtolower($parsed['scheme']), ['http', 'https'], true)) {
-            $this->json_error('Invalid URL', 400);
-        }
-
-        $name = $name !== '' ? $name : (isset($parsed['host']) ? $parsed['host'] : $url);
-
-        global $wpdb;
-        $files_table = self::table('files');
-        $wpdb->insert($files_table, [
-            'folder_id' => $folder_id,
-            'original_name' => $name,
-            'stored_name' => $url,
-            'mime_type' => 'link/url',
-            'size' => 0,
-            'sha1' => null,
-            'uploader_user_id' => $user_id,
-            'created_at' => current_time('mysql'),
-        ], ['%d','%s','%s','%s','%d','%s','%d','%s']);
-        $file_id = (int) $wpdb->insert_id;
-
-        $this->copy_view_permissions('folder', $folder_id, 'file', $file_id, false);
-        $this->log_activity($user_id, 'add_link', 'file', $file_id, ['url' => $url, 'folder_id' => $folder_id]);
-
-        $this->json_success([
-            'file' => [
-                'id' => $file_id,
-                'name' => $name,
-                'mime' => 'link/url',
-                'url' => $url,
-            ],
-        ]);
-    }
 }
 
 register_activation_hook(__FILE__, ['Anchor_Private_File_Manager', 'activate']);
 Anchor_Private_File_Manager::instance();
-
-/**
- * FunnelKit merge tag: {{product_documents}}
- */
-add_filter('wffn_email_merge_tags', function ($tags) {
-    $tags['product_documents'] = [
-        'name' => __('Private Files', 'wc-product-docs'),
-        'description' => __('Attached documents for products in the order.', 'wc-product-docs'),
-        'callback' => function ($order) {
-            if (!is_a($order, 'WC_Order')) return '';
-
-            $manager = Anchor_Private_File_Manager::instance();
-            $docs = $manager->get_order_documents_for_email($order);
-            if (empty($docs)) return '';
-
-            $by_product = [];
-            foreach ($docs as $doc) {
-                $prod = $doc['product'] ?: __('Document', 'wc-product-docs');
-                if (!isset($by_product[$prod])) $by_product[$prod] = [];
-                $by_product[$prod][] = $doc;
-            }
-
-            $html = '<div class="product-documents"><p><strong>' . esc_html__('Private Files:', 'wc-product-docs') . '</strong></p>';
-            foreach ($by_product as $product_title => $items) {
-                $html .= '<p><em>' . esc_html($product_title) . '</em></p><ul style="margin:6px 0 12px; padding-left:16px;">';
-                foreach ($items as $doc) {
-                    $label = $doc['label'] ?: basename($doc['url']);
-                    $html .= '<li><a href="' . esc_url($doc['url']) . '">' . esc_html($label) . '</a></li>';
-                }
-                $html .= '</ul>';
-            }
-
-            return $html . '</div>';
-        },
-    ];
-    return $tags;
-});
