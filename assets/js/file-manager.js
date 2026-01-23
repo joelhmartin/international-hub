@@ -2,6 +2,8 @@ jQuery(function ($) {
     const $root = $('[data-afm]');
     if (!$root.length) return;
 
+    const portalMode = $root.is('[data-apfm]');
+
     const $tree = $root.find('[data-afm-tree]');
     const $grid = $root.find('[data-afm-grid]');
     const $breadcrumbs = $root.find('[data-afm-breadcrumbs]');
@@ -338,12 +340,15 @@ jQuery(function ($) {
         openBranch(state.currentFolderId);
         renderTree(state.tree);
         closeDrawer();
+        $root.addClass('afm--busy');
+        $grid.html('<div class="afm__skeleton afm__skeleton--share"></div>');
         if (productDocsFolderId && state.currentFolderId === productDocsFolderId && AnchorFM.isAdmin) {
             renderBreadcrumbs([{ name: 'Product Docs' }]);
             $root.find('[data-afm-panel]').removeClass('is-active');
             $root.find('[data-afm-panel="product-docs"]').addClass('is-active');
             loadMyProductDocs();
             loadProducts();
+            $root.removeClass('afm--busy');
             return;
         }
         $root.find('[data-afm-panel]').removeClass('is-active');
@@ -357,10 +362,14 @@ jQuery(function ($) {
                 capability: res.data.capability,
                 isProductDocs: res.data.isProductDocs
             });
+        }).always(() => {
+            $root.removeClass('afm--busy');
         });
     }
 
     function bootstrap() {
+        $root.addClass('afm--busy');
+        $tree.html('<div class="afm__skeleton afm__skeleton--share"></div>');
         api('anchor_fm_bootstrap', {}).done(res => {
             if (!res || !res.success) return;
             state.tree = res.data.tree || [];
@@ -372,6 +381,8 @@ jQuery(function ($) {
                 defaultFolderId: res.data.defaultFolderId,
                 productDocsFolderId: AnchorFM.productDocsFolderId || 0
             });
+        }).always(() => {
+            $root.removeClass('afm--busy');
         });
     }
 
@@ -402,9 +413,9 @@ jQuery(function ($) {
         openDrawer();
 
         $drawerTitle.text('Loading…');
-        $preview.html('<div class="afm__skeleton afm__skeleton--preview"></div>');
-        $meta.html('<div class="afm__skeleton afm__skeleton--meta"></div>');
-        $drawerActions.html('');
+            $preview.html('<div class="afm__skeleton afm__skeleton--preview"></div>');
+            $meta.html('<div class="afm__skeleton afm__skeleton--meta"></div>');
+            $drawerActions.html('');
 
         api('anchor_fm_preview', { file_id: state.selectedFileId }).done(res => {
             if (!res || !res.success) return;
@@ -674,6 +685,18 @@ jQuery(function ($) {
             return;
         }
 
+        if (action === 'ungroup-folder') {
+            const folderId = Number(ctx.folderId || 0);
+            if (!folderId) return;
+            api('anchor_fm_move_folder', { folder_id: folderId, target_folder_id: 0 }).done(res => {
+                if (res && res.success) {
+                    bootstrap();
+                    loadFolder(folderId);
+                }
+            });
+            return;
+        }
+
         if (action === 'open-file') {
             const fileId = Number(ctx.fileId || 0);
             if (!fileId) return;
@@ -703,19 +726,31 @@ jQuery(function ($) {
     });
 
     // Events
+    const filesTabActive = () => (!portalMode || $root.hasClass('apfm--tab-files'));
+    const ignoreIfNotFilesTab = (evt) => {
+        if (!filesTabActive()) {
+            if (evt) evt.preventDefault();
+            return true;
+        }
+        return false;
+    };
+
     $root.on('click', '[data-afm-tree-toggle]', function (e) {
         e.preventDefault();
         e.stopPropagation();
+        if (ignoreIfNotFilesTab(e)) return;
         toggleNode($(this).data('afm-tree-toggle'));
     });
 
-    $root.on('click', '[data-afm-open-folder]', function () {
+    $root.on('click', '[data-afm-open-folder]', function (e) {
+        if (ignoreIfNotFilesTab(e)) return;
         loadFolder($(this).data('afm-open-folder'));
     });
 
     $root.on('click', '[data-afm-folder-card]', function (e) {
         const id = $(this).data('afm-folder-card');
         if ($(e.target).closest('[data-afm-folder-menu]').length) return;
+        if (ignoreIfNotFilesTab(e)) return;
         loadFolder(id);
     });
 
@@ -736,10 +771,15 @@ jQuery(function ($) {
         closeMenu();
     });
 
-    $root.on('click', '[data-afm-action="upload"]', function () {
+    $root.on('click', '[data-afm-action="upload"]', function (e) {
+        if (ignoreIfNotFilesTab(e)) return;
         $fileInput.trigger('click');
     });
-    $fileInput.on('change', function () {
+    $fileInput.on('change', function (e) {
+        if (ignoreIfNotFilesTab(e)) {
+            $(this).val('');
+            return;
+        }
         uploadFiles(this.files);
         $(this).val('');
     });
@@ -748,6 +788,7 @@ jQuery(function ($) {
     $content.on('dragenter', function (e) {
         e.preventDefault();
         e.stopPropagation();
+        if (ignoreIfNotFilesTab(e)) return;
         if (capRank(state.currentCapability) < 2) return;
         dragDepth++;
         $root.addClass('afm--drag');
@@ -755,12 +796,14 @@ jQuery(function ($) {
     $content.on('dragover', function (e) {
         e.preventDefault();
         e.stopPropagation();
+        if (ignoreIfNotFilesTab(e)) return;
         if (capRank(state.currentCapability) < 2) return;
         $root.addClass('afm--drag');
     });
     $content.on('dragleave', function (e) {
         e.preventDefault();
         e.stopPropagation();
+        if (ignoreIfNotFilesTab(e)) return;
         if (capRank(state.currentCapability) < 2) return;
         dragDepth = Math.max(0, dragDepth - 1);
         if (!dragDepth) $root.removeClass('afm--drag');
@@ -768,6 +811,7 @@ jQuery(function ($) {
     $content.on('drop', function (e) {
         e.preventDefault();
         e.stopPropagation();
+        if (ignoreIfNotFilesTab(e)) return;
         dragDepth = 0;
         $root.removeClass('afm--drag');
         if (capRank(state.currentCapability) < 2) return;
@@ -776,12 +820,14 @@ jQuery(function ($) {
         }
     });
 
-    $search.on('input', function () {
+    $search.on('input', function (e) {
+        if (ignoreIfNotFilesTab(e)) return;
         state.search = $(this).val();
         renderGrid(state.currentList, state.currentCapability);
     });
 
-    $root.on('click', '[data-afm-action="new-folder"]', function () {
+    $root.on('click', '[data-afm-action="new-folder"]', function (e) {
+        if (ignoreIfNotFilesTab(e)) return;
         closeMenu();
         openTextModal({
             title: 'New folder',
@@ -798,12 +844,17 @@ jQuery(function ($) {
         const folderId = Number($(this).data('afm-folder-menu'));
         if (productDocsFolderId && folderId === productDocsFolderId) return;
         closeMenu();
-        openMenu(this, [
+        const parentId = state.parentById ? (state.parentById[folderId] || 0) : 0;
+        const items = [
             { action: 'rename-folder', label: 'Rename', icon: 'edit' },
             { action: 'permissions-folder', label: 'Permissions', icon: 'lock' },
             { action: 'download-folder', label: 'Download', icon: 'download' },
-            { action: 'delete-folder', label: 'Delete', icon: 'trash', danger: true },
-        ], { folderId });
+        ];
+        if (parentId) {
+            items.push({ action: 'ungroup-folder', label: 'Ungroup (move to top)', icon: 'admin-site' });
+        }
+        items.push({ action: 'delete-folder', label: 'Delete', icon: 'trash', danger: true });
+        openMenu(this, items, { folderId, parentId });
     });
 
     $root.on('click', '[data-afm-action="delete-file"]', function () {

@@ -968,6 +968,14 @@
   opacity: 0.92;
 }
 
+.apfm--lock-files [data-afm-tree],
+.apfm--lock-files [data-afm-panel="files"],
+.apfm--lock-files [data-afm-panel="product-docs"],
+.apfm--lock-files [data-apfm-files-only] {
+  pointer-events: none;
+  opacity: 0.35;
+}
+
 @media (max-width: 980px) {
   .afm__frame {
     grid-template-columns: 1fr;
