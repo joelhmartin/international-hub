@@ -352,6 +352,11 @@ jQuery(function ($) {
             if (!res || !res.success) return;
             renderBreadcrumbs(res.data.breadcrumbs);
             renderGrid({ folders: res.data.folders, files: res.data.files }, res.data.capability);
+            $root.trigger('anchorfm:folderLoaded', {
+                folderId: state.currentFolderId,
+                capability: res.data.capability,
+                isProductDocs: res.data.isProductDocs
+            });
         });
     }
 
@@ -362,6 +367,11 @@ jQuery(function ($) {
             rebuildTreeIndex();
             renderTree(state.tree);
             loadFolder(res.data.defaultFolderId);
+            $root.trigger('anchorfm:bootstrapped', {
+                tree: state.tree,
+                defaultFolderId: res.data.defaultFolderId,
+                productDocsFolderId: AnchorFM.productDocsFolderId || 0
+            });
         });
     }
 
@@ -1182,6 +1192,10 @@ jQuery(function ($) {
             loadProducts();
             loadMyProductDocs();
         });
+    });
+
+    $root.on('anchorfm:refresh', function () {
+        loadFolder(state.currentFolderId);
     });
 
     bootstrap();

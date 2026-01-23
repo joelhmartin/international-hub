@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.1.8
+ * Version: 2.9.02
  * Author: Anchor Corps
  */
 
@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) exit;
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.1.0';
+    const VERSION = '2.2.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
@@ -22,7 +22,9 @@ class Anchor_Private_File_Manager {
     public function __construct() {
         add_shortcode('anchor_file_manager', [$this, 'render_file_manager']);
         add_shortcode('anchor_account_portal', [$this, 'render_account_portal']);
+        add_shortcode('anchor_documents_portal', [$this, 'render_documents_portal']);
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
+        add_action('plugins_loaded', [$this, 'bootstrap_update_checker']);
 
         add_action('wp_ajax_anchor_fm_bootstrap', [$this, 'ajax_bootstrap']);
         add_action('wp_ajax_anchor_fm_list', [$this, 'ajax_list']);
@@ -54,6 +56,66 @@ class Anchor_Private_File_Manager {
 
         add_action('admin_menu', [$this, 'register_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
+    }
+
+    public function bootstrap_update_checker() {
+        $autoload = plugin_dir_path(__FILE__) . 'vendor/autoload.php';
+        if (file_exists($autoload)) {
+            require_once $autoload;
+        }
+
+        $this->maybe_load_env();
+
+        if (!class_exists('\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory')) {
+            return;
+        }
+
+        $checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+            'https://github.com/joelhmartin/international-hub/',
+            __FILE__,
+            plugin_basename(__FILE__)
+        );
+        $checker->setBranch('main');
+
+        $token = $this->get_github_token();
+        if (!empty($token)) {
+            $checker->setAuthentication($token);
+        }
+
+        $api = $checker->getVcsApi();
+        if ($api && method_exists($api, 'enableReleaseAssets')) {
+            $api->enableReleaseAssets();
+        }
+    }
+
+    private function maybe_load_env() {
+        if (!class_exists('\\Dotenv\\Dotenv')) {
+            return;
+        }
+
+        $root = plugin_dir_path(__FILE__);
+        $env_path = $root . '.env';
+        if (!file_exists($env_path)) {
+            return;
+        }
+
+        try {
+            $dotenv = \Dotenv\Dotenv::createImmutable($root);
+            $dotenv->safeLoad();
+        } catch (\Throwable $e) {
+            // Best-effort: ignore env load failures.
+        }
+    }
+
+    private function get_github_token() {
+        if (defined('GITHUB_ACCESS_TOKEN') && GITHUB_ACCESS_TOKEN) {
+            return (string) GITHUB_ACCESS_TOKEN;
+        }
+        $env = getenv('GITHUB_ACCESS_TOKEN');
+        if (!empty($env)) {
+            return (string) $env;
+        }
+        return '';
     }
 
     public function register_settings_page() {
@@ -248,14 +310,14 @@ class Anchor_Private_File_Manager {
         if (!$this->should_enqueue_assets()) return;
 
         $css_path = plugin_dir_path(__FILE__) . 'assets/css/file-manager.css';
-        $js_path = plugin_dir_path(__FILE__) . 'assets/js/file-manager.js';
         $css_ver = file_exists($css_path) ? (string) filemtime($css_path) : self::VERSION;
+        $js_path = plugin_dir_path(__FILE__) . 'assets/js/file-manager.js';
         $js_ver = file_exists($js_path) ? (string) filemtime($js_path) : self::VERSION;
 
         $ap_css_path = plugin_dir_path(__FILE__) . 'assets/css/account-portal.css';
-        $ap_js_path = plugin_dir_path(__FILE__) . 'assets/js/account-portal.js';
         $ap_css_ver = file_exists($ap_css_path) ? (string) filemtime($ap_css_path) : self::VERSION;
-        $ap_js_ver = file_exists($ap_js_path) ? (string) filemtime($ap_js_path) : self::VERSION;
+        $portal_js_path = plugin_dir_path(__FILE__) . 'assets/js/account-documents.js';
+        $portal_js_ver = file_exists($portal_js_path) ? (string) filemtime($portal_js_path) : self::VERSION;
 
         wp_enqueue_style('dashicons');
         wp_enqueue_style(
@@ -264,7 +326,6 @@ class Anchor_Private_File_Manager {
             [],
             $css_ver
         );
-
         wp_enqueue_script(
             'anchor-file-manager',
             plugin_dir_url(__FILE__) . 'assets/js/file-manager.js',
@@ -278,6 +339,21 @@ class Anchor_Private_File_Manager {
         if ($product_docs_id === 0 && current_user_can('administrator')) {
             $product_docs_id = (int) self::ensure_product_docs_folder();
         }
+
+        wp_enqueue_style(
+            'anchor-account-portal',
+            plugin_dir_url(__FILE__) . 'assets/css/account-portal.css',
+            ['anchor-file-manager'],
+            $ap_css_ver
+        );
+        wp_enqueue_script(
+            'anchor-documents-portal',
+            plugin_dir_url(__FILE__) . 'assets/js/account-documents.js',
+            ['jquery', 'anchor-file-manager'],
+            $portal_js_ver,
+            true
+        );
+
         wp_localize_script('anchor-file-manager', 'AnchorFM', [
             'ajax' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce(self::NONCE_ACTION),
@@ -303,21 +379,7 @@ class Anchor_Private_File_Manager {
             ],
         ]);
 
-        // Account Portal assets (reuses AFM base styles).
-        wp_enqueue_style(
-            'anchor-account-portal',
-            plugin_dir_url(__FILE__) . 'assets/css/account-portal.css',
-            ['anchor-file-manager'],
-            $ap_css_ver
-        );
-        wp_enqueue_script(
-            'anchor-account-portal',
-            plugin_dir_url(__FILE__) . 'assets/js/account-portal.js',
-            ['jquery'],
-            $ap_js_ver,
-            true
-        );
-        wp_localize_script('anchor-account-portal', 'AnchorAP', [
+        wp_localize_script('anchor-documents-portal', 'AnchorAP', [
             'ajax' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce(self::NONCE_ACTION),
             'user' => [
@@ -332,54 +394,91 @@ class Anchor_Private_File_Manager {
                 'orders' => __('Orders', 'anchor-private-file-manager'),
                 'account' => __('Account', 'anchor-private-file-manager'),
                 'security' => __('Security', 'anchor-private-file-manager'),
+                'downloads' => __('Downloads', 'anchor-private-file-manager'),
                 'files' => __('Files', 'anchor-private-file-manager'),
             ],
         ]);
     }
 
     public function render_file_manager() {
+        return $this->render_documents_portal();
+    }
+
+    public function render_account_portal() {
+        return $this->render_documents_portal();
+    }
+
+    public function render_documents_portal() {
         if (!is_user_logged_in()) {
-            return '<p>You must be logged in to access files.</p>';
+            return '<p>You must be logged in to access your documents.</p>';
         }
 
-        // Allow any logged-in user: access is governed by folder/file permissions.
-        $user_id = get_current_user_id();
-
-        if (!$this->user_can_access_anything($user_id)) {
-            return '<p>You do not have permission to view these files.</p>';
-        }
+        $user = wp_get_current_user();
 
         ob_start(); ?>
-        <div id="anchor-file-manager" class="afm" data-afm>
+        <div class="afm aap" data-apfm data-afm>
             <div class="afm__frame">
-                <aside class="afm__sidebar" aria-label="<?php esc_attr_e('Folders', 'anchor-private-file-manager'); ?>">
+                <aside class="afm__sidebar" aria-label="<?php esc_attr_e('Account navigation and folders', 'anchor-private-file-manager'); ?>">
                     <div class="afm__brand">
                         <img class="afm__brandMark" src="https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png" aria-hidden="true"></img>
                         <div class="afm__brandText">
-                            <div class="afm__brandTitle"><?php esc_html_e('Centre Files', 'anchor-private-file-manager'); ?></div>
-                            <div class="afm__brandSub"><?php esc_html_e('File manager', 'anchor-private-file-manager'); ?></div>
+                            <div class="afm__brandTitle"><?php esc_html_e('My Account', 'anchor-private-file-manager'); ?></div>
+                            <div class="afm__brandSub"><?php echo esc_html($user->display_name); ?></div>
                         </div>
                     </div>
-                    <div class="afm__sidebarActions">
+                    <nav class="aap__nav" aria-label="<?php esc_attr_e('Sections', 'anchor-private-file-manager'); ?>">
+                        <button type="button" class="aap__navItem is-active" data-apfm-tab="files">
+                            <span class="dashicons dashicons-category" aria-hidden="true"></span>
+                            <?php esc_html_e('Documents', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-apfm-tab="orders">
+                            <span class="dashicons dashicons-clipboard" aria-hidden="true"></span>
+                            <?php esc_html_e('Orders', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-apfm-tab="downloads">
+                            <span class="dashicons dashicons-download" aria-hidden="true"></span>
+                            <?php esc_html_e('Downloads', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-apfm-tab="account">
+                            <span class="dashicons dashicons-admin-users" aria-hidden="true"></span>
+                            <?php esc_html_e('Account', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="aap__navItem" data-apfm-tab="security">
+                            <span class="dashicons dashicons-shield" aria-hidden="true"></span>
+                            <?php esc_html_e('Security', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <a class="aap__navItem aap__navItem--link" href="<?php echo esc_url(wp_logout_url(home_url('/'))); ?>">
+                            <span class="dashicons dashicons-exit" aria-hidden="true"></span>
+                            <?php esc_html_e('Log out', 'anchor-private-file-manager'); ?>
+                        </a>
+                    </nav>
+                    <?php if (current_user_can('administrator')) : ?>
+                    <div class="afm__sidebarActions" data-apfm-files-only>
                         <button type="button" class="afm__btn afm__btn--ghost" data-afm-action="new-folder">
                             <span class="dashicons dashicons-plus" aria-hidden="true"></span>
                             <?php esc_html_e('New folder', 'anchor-private-file-manager'); ?>
                         </button>
                     </div>
+                    <?php endif; ?>
                     <div class="afm__tree" data-afm-tree></div>
                 </aside>
 
-                <main class="afm__main" aria-label="<?php esc_attr_e('Files', 'anchor-private-file-manager'); ?>">
+                <main class="afm__main" aria-label="<?php esc_attr_e('Account content', 'anchor-private-file-manager'); ?>">
                     <header class="afm__toolbar">
                         <div class="afm__breadcrumbs">
+                            <span class="aap__title" data-apfm-title><?php esc_html_e('Documents', 'anchor-private-file-manager'); ?></span>
                             <div class="afm__breadcrumbsTrail" data-afm-breadcrumbs></div>
                         </div>
                         <div class="afm__toolbarRight">
-                            <label class="afm__search">
+                            <label class="afm__search" data-apfm-search hidden>
                                 <span class="dashicons dashicons-search" aria-hidden="true"></span>
                                 <input type="search" placeholder="<?php esc_attr_e('Search in folder…', 'anchor-private-file-manager'); ?>" data-afm-search>
                             </label>
-                            <div class="afm__upload">
+                            <button type="button" class="afm__btn afm__btn--secondary" data-apfm-action="refresh">
+                                <span class="dashicons dashicons-update" aria-hidden="true"></span>
+                                <?php esc_html_e('Refresh', 'anchor-private-file-manager'); ?>
+                            </button>
+                            <div class="afm__upload" data-apfm-upload hidden>
                                 <input type="file" multiple class="afm__fileInput" data-afm-file-input>
                                 <button type="button" class="afm__btn afm__btn--primary" data-afm-action="upload">
                                     <span class="dashicons dashicons-upload" aria-hidden="true"></span>
@@ -390,7 +489,7 @@ class Anchor_Private_File_Manager {
                     </header>
 
                     <section class="afm__content">
-                        <div class="afm__panel is-active" data-afm-panel="files">
+                        <div class="afm__panel is-active" data-apfm-panel="files" data-afm-panel="files">
                             <div class="afm__dropzone" data-afm-dropzone>
                                 <div class="afm__dropzoneInner">
                                     <div class="afm__dropIcon dashicons dashicons-cloud-upload" aria-hidden="true"></div>
@@ -401,7 +500,7 @@ class Anchor_Private_File_Manager {
                             <div class="afm__grid" data-afm-grid></div>
                         </div>
 
-                        <div class="afm__panel" data-afm-panel="product-docs">
+                        <div class="afm__panel" data-apfm-panel="files" data-afm-panel="product-docs">
                             <div class="afm__twoCol">
                                 <div class="afm__cardBox">
                                     <div class="afm__sectionTitle"><?php esc_html_e('Product Documents', 'anchor-private-file-manager'); ?></div>
@@ -424,22 +523,94 @@ class Anchor_Private_File_Manager {
                                 <?php endif; ?>
                             </div>
                         </div>
-                    </section>
-                </main>
 
-                <aside class="afm__drawer" data-afm-drawer aria-label="<?php esc_attr_e('Details', 'anchor-private-file-manager'); ?>">
-                    <div class="afm__drawerHeader">
-                        <div class="afm__drawerTitle" data-afm-drawer-title><?php esc_html_e('Select a file', 'anchor-private-file-manager'); ?></div>
-                        <button type="button" class="afm__iconBtn" data-afm-action="close-drawer" aria-label="<?php esc_attr_e('Close', 'anchor-private-file-manager'); ?>">
-                            <span class="dashicons dashicons-no" aria-hidden="true"></span>
-                        </button>
-                    </div>
-                    <div class="afm__drawerBody">
-                        <div class="afm__preview" data-afm-preview></div>
-                        <div class="afm__meta" data-afm-meta></div>
-                        <div class="afm__drawerActions" data-afm-drawer-actions></div>
-                    </div>
-                </aside>
+                        <div class="afm__panel aap__panel" data-apfm-panel="orders">
+                            <div class="aap__grid" data-aap-orders></div>
+                        </div>
+
+                        <div class="afm__panel aap__panel" data-apfm-panel="downloads">
+                            <div class="aap__grid" data-aap-downloads></div>
+                        </div>
+
+                        <div class="afm__panel aap__panel" data-apfm-panel="account">
+                            <form class="aap__form" data-aap-profile-form>
+                                <div class="aap__formRow">
+                                    <label class="aap__label"><?php esc_html_e('First name', 'anchor-private-file-manager'); ?></label>
+                                    <input type="text" class="afm__input" name="first_name" value="<?php echo esc_attr($user->first_name); ?>">
+                                </div>
+                                <div class="aap__formRow">
+                                    <label class="aap__label"><?php esc_html_e('Last name', 'anchor-private-file-manager'); ?></label>
+                                    <input type="text" class="afm__input" name="last_name" value="<?php echo esc_attr($user->last_name); ?>">
+                                </div>
+                                <div class="aap__formRow">
+                                    <label class="aap__label"><?php esc_html_e('Email', 'anchor-private-file-manager'); ?></label>
+                                    <input type="email" class="afm__input" name="user_email" value="<?php echo esc_attr($user->user_email); ?>">
+                                </div>
+                                <button type="submit" class="afm__btn afm__btn--primary">
+                                    <span class="dashicons dashicons-saved" aria-hidden="true"></span>
+                                    <?php esc_html_e('Save changes', 'anchor-private-file-manager'); ?>
+                                </button>
+                                <div class="aap__notice" data-aap-profile-notice hidden></div>
+                            </form>
+                        </div>
+
+                        <div class="afm__panel aap__panel" data-apfm-panel="security">
+                            <div class="aap__stack">
+                                <form class="aap__form" data-aap-password-form>
+                                    <div class="aap__formRow">
+                                        <label class="aap__label"><?php esc_html_e('New password', 'anchor-private-file-manager'); ?></label>
+                                        <input type="password" class="afm__input" name="new_password" autocomplete="new-password">
+                                    </div>
+                                    <button type="submit" class="afm__btn afm__btn--primary">
+                                        <span class="dashicons dashicons-lock" aria-hidden="true"></span>
+                                        <?php esc_html_e('Change password', 'anchor-private-file-manager'); ?>
+                                    </button>
+                                    <div class="aap__notice" data-aap-password-notice hidden></div>
+                                </form>
+
+                                <div class="aap__divider"></div>
+
+                                <div class="aap__reset">
+                                    <div class="aap__help">
+                                        <?php esc_html_e('Send a password reset link to your email.', 'anchor-private-file-manager'); ?>
+                                    </div>
+                                    <button type="button" class="afm__btn afm__btn--secondary" data-aap-action="send-reset">
+                                        <span class="dashicons dashicons-email" aria-hidden="true"></span>
+                                        <?php esc_html_e('Email reset link', 'anchor-private-file-manager'); ?>
+                                    </button>
+                                    <div class="aap__notice" data-aap-reset-notice hidden></div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <aside class="afm__drawer" data-afm-drawer aria-label="<?php esc_attr_e('Details', 'anchor-private-file-manager'); ?>">
+                        <div class="afm__drawerHeader">
+                            <div class="afm__drawerTitle" data-afm-drawer-title><?php esc_html_e('Select a file', 'anchor-private-file-manager'); ?></div>
+                            <button type="button" class="afm__iconBtn" data-afm-action="close-drawer" aria-label="<?php esc_attr_e('Close', 'anchor-private-file-manager'); ?>">
+                                <span class="dashicons dashicons-no" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                        <div class="afm__drawerBody">
+                            <div class="afm__preview" data-afm-preview></div>
+                            <div class="afm__meta" data-afm-meta></div>
+                            <div class="afm__drawerActions" data-afm-drawer-actions></div>
+                        </div>
+                    </aside>
+
+                    <aside class="afm__drawer" data-aap-drawer aria-label="<?php esc_attr_e('Order details', 'anchor-private-file-manager'); ?>">
+                        <div class="afm__drawerHeader">
+                            <div class="afm__drawerTitle" data-aap-drawer-title><?php esc_html_e('Order', 'anchor-private-file-manager'); ?></div>
+                            <button type="button" class="afm__iconBtn" data-aap-action="close-drawer" aria-label="<?php esc_attr_e('Close', 'anchor-private-file-manager'); ?>">
+                                <span class="dashicons dashicons-no" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                        <div class="afm__drawerBody">
+                            <div class="afm__meta" data-aap-order-meta></div>
+                            <div class="aap__items" data-aap-order-items></div>
+                        </div>
+                    </aside>
+                </main>
             </div>
 
             <div class="afm__modal" data-afm-modal hidden>
@@ -469,142 +640,10 @@ class Anchor_Private_File_Manager {
         $post = get_post();
         if (!$post) return false;
         $content = (string) $post->post_content;
-        return has_shortcode($content, 'anchor_file_manager') || has_shortcode($content, 'anchor_account_portal');
+        return has_shortcode($content, 'anchor_file_manager')
+            || has_shortcode($content, 'anchor_account_portal')
+            || has_shortcode($content, 'anchor_documents_portal');
     }
-
-    public function render_account_portal() {
-        if (!is_user_logged_in()) {
-            return '<p>You must be logged in to access your account.</p>';
-        }
-
-        ob_start(); ?>
-        <div class="afm aap" data-aap>
-            <div class="afm__frame">
-                <aside class="afm__sidebar" aria-label="<?php esc_attr_e('Account navigation', 'anchor-private-file-manager'); ?>">
-                    <div class="afm__brand">
-                        <img class="afm__brandMark" src="https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png" aria-hidden="true"></img>
-                        <div class="afm__brandText">
-                            <div class="afm__brandTitle"><?php esc_html_e('My Account', 'anchor-private-file-manager'); ?></div>
-                            <div class="afm__brandSub"><?php echo esc_html(wp_get_current_user()->display_name); ?></div>
-                        </div>
-                    </div>
-                    <nav class="aap__nav" aria-label="<?php esc_attr_e('Sections', 'anchor-private-file-manager'); ?>">
-                        <button type="button" class="aap__navItem is-active" data-aap-tab="account">
-                            <span class="dashicons dashicons-admin-users" aria-hidden="true"></span>
-                            <?php esc_html_e('Account', 'anchor-private-file-manager'); ?>
-                        </button>
-                        <button type="button" class="aap__navItem" data-aap-tab="orders">
-                            <span class="dashicons dashicons-clipboard" aria-hidden="true"></span>
-                            <?php esc_html_e('Orders', 'anchor-private-file-manager'); ?>
-                        </button>
-                        <button type="button" class="aap__navItem" data-aap-tab="downloads">
-                            <span class="dashicons dashicons-download" aria-hidden="true"></span>
-                            <?php esc_html_e('Downloads', 'anchor-private-file-manager'); ?>
-                        </button>
-                        <button type="button" class="aap__navItem" data-aap-tab="security">
-                            <span class="dashicons dashicons-shield" aria-hidden="true"></span>
-                            <?php esc_html_e('Security', 'anchor-private-file-manager'); ?>
-                        </button>
-                        <a class="aap__navItem aap__navItem--link" href="<?php echo esc_url(wp_logout_url(home_url('/'))); ?>">
-                            <span class="dashicons dashicons-exit" aria-hidden="true"></span>
-                            <?php esc_html_e('Log out', 'anchor-private-file-manager'); ?>
-                        </a>
-                    </nav>
-                </aside>
-
-                <main class="afm__main" aria-label="<?php esc_attr_e('Account content', 'anchor-private-file-manager'); ?>">
-                    <header class="afm__toolbar">
-                        <div class="afm__breadcrumbs">
-                            <span class="aap__title" data-aap-title><?php esc_html_e('Account', 'anchor-private-file-manager'); ?></span>
-                        </div>
-                        <div class="afm__toolbarRight">
-                            <button type="button" class="afm__btn afm__btn--secondary" data-aap-action="refresh">
-                                <span class="dashicons dashicons-update" aria-hidden="true"></span>
-                                <?php esc_html_e('Refresh', 'anchor-private-file-manager'); ?>
-                            </button>
-                        </div>
-                    </header>
-
-                    <section class="afm__content">
-                        <div class="aap__panel is-active" data-aap-panel="orders">
-                            <div class="aap__grid" data-aap-orders></div>
-                        </div>
-
-                        <div class="aap__panel" data-aap-panel="downloads">
-                            <div class="aap__grid" data-aap-downloads></div>
-                        </div>
-
-                        <div class="aap__panel" data-aap-panel="account">
-                            <form class="aap__form" data-aap-profile-form>
-                                <div class="aap__formRow">
-                                    <label class="aap__label"><?php esc_html_e('First name', 'anchor-private-file-manager'); ?></label>
-                                    <input type="text" class="afm__input" name="first_name" value="<?php echo esc_attr(wp_get_current_user()->first_name); ?>">
-                                </div>
-                                <div class="aap__formRow">
-                                    <label class="aap__label"><?php esc_html_e('Last name', 'anchor-private-file-manager'); ?></label>
-                                    <input type="text" class="afm__input" name="last_name" value="<?php echo esc_attr(wp_get_current_user()->last_name); ?>">
-                                </div>
-                                <div class="aap__formRow">
-                                    <label class="aap__label"><?php esc_html_e('Email', 'anchor-private-file-manager'); ?></label>
-                                    <input type="email" class="afm__input" name="user_email" value="<?php echo esc_attr(wp_get_current_user()->user_email); ?>">
-                                </div>
-                                <button type="submit" class="afm__btn afm__btn--primary">
-                                    <span class="dashicons dashicons-saved" aria-hidden="true"></span>
-                                    <?php esc_html_e('Save changes', 'anchor-private-file-manager'); ?>
-                                </button>
-                                <div class="aap__notice" data-aap-profile-notice hidden></div>
-                            </form>
-                        </div>
-
-                        <div class="aap__panel" data-aap-panel="security">
-                            <div class="aap__stack">
-                                <form class="aap__form" data-aap-password-form>
-                                    <div class="aap__formRow">
-                                        <label class="aap__label"><?php esc_html_e('New password', 'anchor-private-file-manager'); ?></label>
-                                        <input type="password" class="afm__input" name="new_password" autocomplete="new-password">
-                                    </div>
-                                    <button type="submit" class="afm__btn afm__btn--primary">
-                                        <span class="dashicons dashicons-lock" aria-hidden="true"></span>
-                                        <?php esc_html_e('Change password', 'anchor-private-file-manager'); ?>
-                                    </button>
-                                    <div class="aap__notice" data-aap-password-notice hidden></div>
-                                </form>
-
-                                <div class="aap__divider"></div>
-
-                                <div class="aap__reset">
-                                    <div class="aap__help">
-                                        <?php esc_html_e('Send a password reset link to your email.', 'anchor-private-file-manager'); ?>
-                                    </div>
-                                    <button type="button" class="afm__btn afm__btn--secondary" data-aap-action="send-reset">
-                                        <span class="dashicons dashicons-email" aria-hidden="true"></span>
-                                        <?php esc_html_e('Email reset link', 'anchor-private-file-manager'); ?>
-                                    </button>
-                                    <div class="aap__notice" data-aap-reset-notice hidden></div>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-                </main>
-
-                <aside class="afm__drawer" data-aap-drawer aria-label="<?php esc_attr_e('Order details', 'anchor-private-file-manager'); ?>">
-                    <div class="afm__drawerHeader">
-                        <div class="afm__drawerTitle" data-aap-drawer-title><?php esc_html_e('Order', 'anchor-private-file-manager'); ?></div>
-                        <button type="button" class="afm__iconBtn" data-aap-action="close-drawer" aria-label="<?php esc_attr_e('Close', 'anchor-private-file-manager'); ?>">
-                            <span class="dashicons dashicons-no" aria-hidden="true"></span>
-                        </button>
-                    </div>
-                    <div class="afm__drawerBody">
-                        <div class="afm__meta" data-aap-order-meta></div>
-                        <div class="aap__items" data-aap-order-items></div>
-                    </div>
-                </aside>
-            </div>
-        </div>
-        <?php
-        return ob_get_clean();
-    }
-
     private function user_can_access_anything($user_id) {
         if (user_can($user_id, 'administrator')) {
             return true;
