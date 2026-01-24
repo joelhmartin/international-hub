@@ -84,9 +84,12 @@ jQuery(function ($) {
     }
 
     function showPanels(tab) {
+        $panels.removeClass('is-active').prop('hidden', true);
         $panels.each(function () {
             const panelTab = String($(this).data('apfm-panel') || '');
-            $(this).prop('hidden', panelTab !== tab);
+            if (panelTab === tab) {
+                $(this).prop('hidden', false).addClass('is-active');
+            }
         });
     }
 
