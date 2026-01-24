@@ -343,15 +343,6 @@ jQuery(function ($) {
         closeDrawer();
         $root.addClass('afm--busy');
         $grid.html('<div class="afm__skeleton afm__skeleton--share"></div>');
-        if (productDocsFolderId && state.currentFolderId === productDocsFolderId && AnchorFM.isAdmin) {
-            renderBreadcrumbs([{ name: 'Product Docs' }]);
-            $root.find('[data-afm-panel]').removeClass('is-active');
-            $root.find('[data-afm-panel="product-docs"]').addClass('is-active');
-            loadMyProductDocs();
-            loadProducts();
-            $root.removeClass('afm--busy');
-            return;
-        }
         $root.find('[data-afm-panel]').removeClass('is-active');
         $root.find('[data-afm-panel="files"]').addClass('is-active');
         api('anchor_fm_list', { folder_id: state.currentFolderId }).done(res => {
@@ -990,7 +981,7 @@ jQuery(function ($) {
         window.setTimeout(() => $el.removeClass('is-drop-flash'), 500);
     }
 
-    // Panels follow the tree selection; Product Docs panel is admin-only and triggered when that folder is selected.
+    // Panels follow the tree selection; Product Docs panel is admin-only and triggered by the admin tab.
 
     // Permissions: user search/add/remove
     let lastUserResults = [];
@@ -1250,6 +1241,14 @@ jQuery(function ($) {
 
     $root.on('anchorfm:refresh', function () {
         loadFolder(state.currentFolderId);
+    });
+
+    $root.on('anchorfm:showProductDocs', function () {
+        if (!AnchorFM.isAdmin || !$productDocs.length) return;
+        $root.find('[data-afm-panel]').removeClass('is-active');
+        $root.find('[data-afm-panel="product-docs"]').addClass('is-active');
+        loadMyProductDocs();
+        loadProducts();
     });
 
     bootstrap();

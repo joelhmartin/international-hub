@@ -978,14 +978,12 @@
 
 .apfm--lock-files [data-afm-tree],
 .apfm--lock-files [data-afm-panel="files"],
-.apfm--lock-files [data-afm-panel="product-docs"],
 .apfm--lock-files [data-apfm-files-only] {
   pointer-events: none;
   opacity: 0.35;
 }
 
 .apfm--hide-files [data-afm-panel="files"],
-.apfm--hide-files [data-afm-panel="product-docs"],
 .apfm--hide-files [data-afm-drawer] {
   display: none !important;
 }

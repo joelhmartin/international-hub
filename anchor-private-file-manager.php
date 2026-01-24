@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.07
+ * Version: 2.9.08
  * Author: Anchor Corps
  */
 
@@ -445,6 +445,12 @@ class Anchor_Private_File_Manager {
                             <span class="dashicons dashicons-download" aria-hidden="true"></span>
                             <?php esc_html_e('Downloads', 'anchor-private-file-manager'); ?>
                         </button>
+                        <?php if (current_user_can('administrator')) : ?>
+                        <button type="button" class="aap__navItem" data-apfm-tab="product-docs">
+                            <span class="dashicons dashicons-portfolio" aria-hidden="true"></span>
+                            <?php esc_html_e('Product Docs', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <?php endif; ?>
                         <button type="button" class="aap__navItem" data-apfm-tab="account">
                             <span class="dashicons dashicons-admin-users" aria-hidden="true"></span>
                             <?php esc_html_e('Account', 'anchor-private-file-manager'); ?>
@@ -506,13 +512,21 @@ class Anchor_Private_File_Manager {
                             <div class="afm__grid" data-afm-grid></div>
                         </div>
 
-                        <div class="afm__panel" data-apfm-panel="files" data-afm-panel="product-docs">
+                        <div class="afm__panel aap__panel" data-apfm-panel="orders">
+                            <div class="aap__grid" data-aap-orders></div>
+                        </div>
+
+                        <div class="afm__panel aap__panel" data-apfm-panel="downloads">
+                            <div class="aap__grid" data-aap-downloads></div>
+                        </div>
+
+                        <?php if (current_user_can('administrator')) : ?>
+                        <div class="afm__panel aap__panel" data-apfm-panel="product-docs" data-afm-panel="product-docs">
                             <div class="afm__twoCol">
                                 <div class="afm__cardBox">
                                     <div class="afm__sectionTitle"><?php esc_html_e('Product Documents', 'anchor-private-file-manager'); ?></div>
                                     <div class="afm__grid" data-afm-product-docs></div>
                                 </div>
-                                <?php if (current_user_can('administrator')) : ?>
                                 <div class="afm__cardBox">
                                     <div class="afm__sectionTitle"><?php esc_html_e('Assign documents to products', 'anchor-private-file-manager'); ?></div>
                                     <div class="afm__formRow">
@@ -526,17 +540,9 @@ class Anchor_Private_File_Manager {
                                     </button>
                                     <div class="afm__notice" data-afm-product-docs-notice hidden></div>
                                 </div>
-                                <?php endif; ?>
                             </div>
                         </div>
-
-                        <div class="afm__panel aap__panel" data-apfm-panel="orders">
-                            <div class="aap__grid" data-aap-orders></div>
-                        </div>
-
-                        <div class="afm__panel aap__panel" data-apfm-panel="downloads">
-                            <div class="aap__grid" data-aap-downloads></div>
-                        </div>
+                        <?php endif; ?>
 
                         <div class="afm__panel aap__panel" data-apfm-panel="account">
                             <form class="aap__form" data-aap-profile-form>
@@ -972,11 +978,10 @@ class Anchor_Private_File_Manager {
         if (!$all) return [];
 
         $product_docs_id = (int) get_option(self::OPT_PD_FOLDER_ID, 0);
-        $is_admin = user_can($user_id, 'administrator');
 
         $by_id = [];
         foreach ($all as $row) {
-            if ((int) $row->id === $product_docs_id && !$is_admin) {
+            if ((int) $row->id === $product_docs_id) {
                 continue;
             }
             $by_id[(int) $row->id] = $row;
@@ -1045,7 +1050,7 @@ class Anchor_Private_File_Manager {
         $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
         if ($folder_id < 0) $this->json_error('Invalid folder_id');
         $product_docs_id = (int) get_option(self::OPT_PD_FOLDER_ID, 0);
-        if ($folder_id === $product_docs_id && !user_can($user_id, 'administrator')) {
+        if ($folder_id === $product_docs_id) {
             $this->json_error('Forbidden', 403);
         }
         if ($folder_id > 0 && !$this->can_user_view_folder($user_id, $folder_id)) {
@@ -1062,7 +1067,7 @@ class Anchor_Private_File_Manager {
         ));
         $subfolders = [];
         foreach ((array) $subfolders_raw as $f) {
-            if ((int) $f->id === $product_docs_id && !user_can($user_id, 'administrator')) continue;
+            if ((int) $f->id === $product_docs_id) continue;
             if (!$this->can_user_view_folder($user_id, (int) $f->id)) continue;
             $subfolders[] = [
                 'id' => (int) $f->id,
