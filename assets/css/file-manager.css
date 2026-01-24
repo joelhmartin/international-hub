@@ -185,6 +185,9 @@
   align-items: center;
   gap: 10px;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .afm__tag {
@@ -918,6 +921,11 @@
 .afm__menuItem:hover {
   background: var(--afm-panel);
   border-color: var(--afm-border);
+}
+
+.afm__menuItem.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .afm__menuItem.is-danger {

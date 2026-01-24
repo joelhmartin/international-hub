@@ -10,6 +10,7 @@ jQuery(function ($) {
     const $refreshBtn = $root.find('[data-apfm-action="refresh"]');
     const $tree = $root.find('[data-afm-tree]');
     const $filesOnly = $root.find('[data-apfm-files-only]');
+    const $breadcrumbs = $root.find('[data-afm-breadcrumbs]');
 
     const $orders = $root.find('[data-aap-orders]');
     const $downloads = $root.find('[data-aap-downloads]');
@@ -73,6 +74,10 @@ jQuery(function ($) {
         $refreshBtn.prop('hidden', isFiles && hasFolder ? true : false);
         $tree.prop('hidden', !isFiles);
         $filesOnly.prop('hidden', !isFiles);
+        $breadcrumbs.toggle(isFiles);
+        if (!isFiles) {
+            $breadcrumbs.html('');
+        }
         $root.toggleClass('apfm--tab-files', isFiles);
         $root.toggleClass('apfm--lock-files', !isFiles);
     }

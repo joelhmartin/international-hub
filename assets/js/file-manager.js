@@ -86,7 +86,8 @@ jQuery(function ($) {
 
     function renderTreeNode(node) {
         const isOwner = node.ownerUserId && AnchorFM.user && node.ownerUserId === AnchorFM.user.id;
-        const label = esc(node.name) + (node.isPrivate ? ' <span class="afm__tag">Private</span>' : '');
+        const labelText = esc(node.name);
+        const label = labelText + (node.isPrivate ? ' <span class="afm__tag">Private</span>' : '');
         const hasChildren = node.children && node.children.length;
         const isExpanded = hasChildren && state.expandedNodes.has(node.id);
         const childrenHtml = hasChildren
@@ -99,7 +100,7 @@ jQuery(function ($) {
                     ${hasChildren ? `<button type="button" class="afm__treeToggle" data-afm-tree-toggle="${node.id}" aria-label="Toggle folder" aria-expanded="${isExpanded ? 'true' : 'false'}">
                         <span class="dashicons dashicons-arrow-right-alt2" aria-hidden="true"></span>
                     </button>` : `<span class="afm__treeToggle is-placeholder" aria-hidden="true"></span>`}
-                    <button type="button" class="afm__treeBtn" data-afm-open-folder="${node.id}">
+                    <button type="button" class="afm__treeBtn" data-afm-open-folder="${node.id}" title="${labelText}">
                         <span class="dashicons dashicons-category afm__treeIcon" aria-hidden="true"></span>
                         <span class="afm__treeLabel">${label}</span>
                     </button>
@@ -233,7 +234,7 @@ jQuery(function ($) {
 
         const canAdminAct = !!AnchorFM.isAdmin;
         const folderCards = folders.map(f => `
-            <div class="afm__card afm__card--folder" data-afm-folder-card="${f.id}" draggable="${AnchorFM.isAdmin ? 'true' : 'false'}">
+            <div class="afm__card afm__card--folder" data-afm-folder-card="${f.id}" draggable="${AnchorFM.isAdmin ? 'true' : 'false'}" title="${esc(f.name)}">
                 <div class="afm__cardIcon dashicons dashicons-category" aria-hidden="true"></div>
                 <div class="afm__cardMain">
                     <div class="afm__cardTitle">${esc(f.name)}</div>
@@ -615,7 +616,7 @@ jQuery(function ($) {
         const rootRect = $root[0].getBoundingClientRect();
 
         const html = (items || []).map(it => `
-            <button type="button" class="afm__menuItem ${it.danger ? 'is-danger' : ''}" data-afm-menu-action="${esc(it.action)}">
+            <button type="button" class="afm__menuItem ${it.danger ? 'is-danger' : ''} ${it.disabled ? 'is-disabled' : ''}" data-afm-menu-action="${esc(it.action)}" ${it.disabled ? 'disabled' : ''}>
                 <span class="dashicons dashicons-${esc(it.icon || 'admin-generic')}" aria-hidden="true"></span>
                 <span>${esc(it.label)}</span>
             </button>
@@ -642,6 +643,10 @@ jQuery(function ($) {
     $menu.on('click', '[data-afm-menu-action]', function () {
         const action = String($(this).data('afm-menu-action'));
         const ctx = state.menuContext || {};
+        if ($(this).hasClass('is-disabled')) {
+            closeMenu();
+            return;
+        }
         closeMenu();
 
         if (action === 'rename-folder') {
@@ -850,9 +855,7 @@ jQuery(function ($) {
             { action: 'permissions-folder', label: 'Permissions', icon: 'lock' },
             { action: 'download-folder', label: 'Download', icon: 'download' },
         ];
-        if (parentId) {
-            items.push({ action: 'ungroup-folder', label: 'Ungroup (move to top)', icon: 'admin-site' });
-        }
+        items.push({ action: 'ungroup-folder', label: 'Move to top', icon: 'admin-site', disabled: parentId === 0 });
         items.push({ action: 'delete-folder', label: 'Delete', icon: 'trash', danger: true });
         openMenu(this, items, { folderId, parentId });
     });
