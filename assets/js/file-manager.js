@@ -26,6 +26,7 @@ jQuery(function ($) {
     const $dropzone = $root.find('[data-afm-dropzone]');
     const $content = $root.find('.afm__content');
     const $fileInput = $root.find('[data-afm-file-input]');
+    const $linkBtn = $root.find('[data-afm-action="new-link"]');
 
     const productDocsFolderId = Number(AnchorFM.productDocsFolderId || 0);
     const state = {
@@ -226,10 +227,15 @@ jQuery(function ($) {
 
         const canManage = capRank(state.currentCapability) >= 3;
         const canUpload = canManage && state.currentFolderId > 0;
+        const canAddLink = canManage && state.currentFolderId > 0;
         $root.toggleClass('afm--canCreateFolder', canManage);
         $root.toggleClass('afm--canUpload', canUpload);
+        if ($linkBtn.length) {
+            $linkBtn.prop('disabled', !canAddLink);
+        }
 
         const folders = (list.folders || []).filter(f => matchesSearch(f.name) && (!productDocsFolderId || Number(f.id) !== productDocsFolderId));
+        const links = (list.links || []).filter(l => matchesSearch(l.title));
         const files = (list.files || []).filter(f => matchesSearch(f.name));
 
         const canAdminAct = !!AnchorFM.isAdmin;
@@ -241,6 +247,19 @@ jQuery(function ($) {
                     <div class="afm__cardSub">${f.isPrivate ? 'Private' : 'Folder'}</div>
                 </div>
                 ${canAdminAct ? `<button type="button" class="afm__kebab" data-afm-folder-menu="${f.id}" aria-label="Folder actions">
+                    <span class="dashicons dashicons-ellipsis" aria-hidden="true"></span>
+                </button>` : ''}
+            </div>
+        `).join('');
+
+        const linkCards = links.map(l => `
+            <div class="afm__card afm__card--link" data-afm-link-card="${l.id}" title="${esc(l.url)}">
+                <div class="afm__cardIcon dashicons dashicons-admin-links" aria-hidden="true"></div>
+                <div class="afm__cardMain">
+                    <div class="afm__cardTitle">${esc(l.title)}</div>
+                    <div class="afm__cardSub">${esc(l.url)}</div>
+                </div>
+                ${canAdminAct ? `<button type="button" class="afm__kebab" data-afm-link-menu="${l.id}" aria-label="Link actions">
                     <span class="dashicons dashicons-ellipsis" aria-hidden="true"></span>
                 </button>` : ''}
             </div>
@@ -259,11 +278,11 @@ jQuery(function ($) {
             </div>
         `).join('');
 
-        const empty = (!folderCards && !fileCards)
+        const empty = (!folderCards && !linkCards && !fileCards)
             ? `<div class="afm__empty">${esc(AnchorFM.i18n.noFiles)}</div>`
             : '';
 
-        $grid.html(folderCards + fileCards + empty);
+        $grid.html(folderCards + linkCards + fileCards + empty);
     }
 
     function openDrawer() {
@@ -334,6 +353,31 @@ jQuery(function ($) {
         $modalBody.html(`<div class="afm__help">${esc(message)}</div>`);
         setModalPrimary(label, mode, payload);
         openModal();
+    }
+
+    function openLinkModal(opts) {
+        const title = opts && opts.title ? String(opts.title) : 'Link';
+        const label = opts && opts.primaryLabel ? String(opts.primaryLabel) : 'Save';
+        const mode = opts && opts.mode ? String(opts.mode) : 'link';
+        const payload = opts && opts.payload ? opts.payload : null;
+        const linkTitle = opts && opts.linkTitle ? String(opts.linkTitle) : '';
+        const linkUrl = opts && opts.linkUrl ? String(opts.linkUrl) : '';
+
+        $modalTitle.text(title);
+        $modalBody.html(`
+            <div class="afm__fieldRow">
+                <label class="afm__label">Title</label>
+                <input type="text" class="afm__input" data-afm-link-title placeholder="Link title" value="${esc(linkTitle)}">
+            </div>
+            <div class="afm__fieldRow">
+                <label class="afm__label">URL</label>
+                <input type="url" class="afm__input" data-afm-link-url placeholder="https://example.com" value="${esc(linkUrl)}">
+                <div class="afm__help">Use a full URL starting with https://</div>
+            </div>
+        `);
+        setModalPrimary(label, mode, payload);
+        openModal();
+        window.setTimeout(() => $modalBody.find('[data-afm-link-title]').trigger('focus'), 0);
     }
 
     function loadFolder(folderId) {
@@ -553,6 +597,17 @@ jQuery(function ($) {
             });
             return;
         }
+        if (state.modalMode === 'create-link') {
+            const title = String($modalBody.find('[data-afm-link-title]').val() || '').trim();
+            const url = String($modalBody.find('[data-afm-link-url]').val() || '').trim();
+            if (!title || !url) return;
+            api('anchor_fm_create_link', { folder_id: state.currentFolderId, title, url }).done(res => {
+                if (!res || !res.success) return;
+                closeModal();
+                loadFolder(state.currentFolderId);
+            });
+            return;
+        }
         if (state.modalMode === 'rename-folder') {
             const name = String($modalBody.find('[data-afm-modal-input]').val() || '').trim();
             const folderId = state.modalPayload && state.modalPayload.folderId ? Number(state.modalPayload.folderId) : 0;
@@ -564,6 +619,18 @@ jQuery(function ($) {
             });
             return;
         }
+        if (state.modalMode === 'edit-link') {
+            const title = String($modalBody.find('[data-afm-link-title]').val() || '').trim();
+            const url = String($modalBody.find('[data-afm-link-url]').val() || '').trim();
+            const linkId = state.modalPayload && state.modalPayload.linkId ? Number(state.modalPayload.linkId) : 0;
+            if (!linkId || !title || !url) return;
+            api('anchor_fm_update_link', { link_id: linkId, title, url }).done(res => {
+                if (!res || !res.success) return;
+                closeModal();
+                loadFolder(state.currentFolderId);
+            });
+            return;
+        }
         if (state.modalMode === 'delete-folder') {
             const folderId = state.modalPayload && state.modalPayload.folderId ? Number(state.modalPayload.folderId) : 0;
             if (!folderId) return;
@@ -571,6 +638,16 @@ jQuery(function ($) {
                 if (!res || !res.success) return;
                 closeModal();
                 bootstrap();
+                loadFolder(state.currentFolderId);
+            });
+            return;
+        }
+        if (state.modalMode === 'delete-link') {
+            const linkId = state.modalPayload && state.modalPayload.linkId ? Number(state.modalPayload.linkId) : 0;
+            if (!linkId) return;
+            api('anchor_fm_delete_link', { link_id: linkId }).done(res => {
+                if (!res || !res.success) return;
+                closeModal();
                 loadFolder(state.currentFolderId);
             });
             return;
@@ -631,6 +708,11 @@ jQuery(function ($) {
         return '';
     }
 
+    function findLinkById(linkId) {
+        const links = (state.currentList && state.currentList.links) ? state.currentList.links : [];
+        return links.find(l => Number(l.id) === Number(linkId)) || null;
+    }
+
     $menu.on('click', '[data-afm-menu-action]', function () {
         const action = String($(this).data('afm-menu-action'));
         const ctx = state.menuContext || {};
@@ -689,6 +771,35 @@ jQuery(function ($) {
                     bootstrap();
                     loadFolder(folderId);
                 }
+            });
+            return;
+        }
+
+        if (action === 'edit-link') {
+            const linkId = Number(ctx.linkId || 0);
+            if (!linkId) return;
+            const link = findLinkById(linkId);
+            if (!link) return;
+            openLinkModal({
+                title: 'Edit link',
+                primaryLabel: 'Save',
+                mode: 'edit-link',
+                payload: { linkId },
+                linkTitle: link.title || '',
+                linkUrl: link.url || '',
+            });
+            return;
+        }
+
+        if (action === 'delete-link') {
+            const linkId = Number(ctx.linkId || 0);
+            if (!linkId) return;
+            openConfirmModal({
+                title: 'Delete link',
+                primaryLabel: 'Delete',
+                mode: 'delete-link',
+                payload: { linkId },
+                message: 'This will remove the link from this folder.',
             });
             return;
         }
@@ -754,6 +865,15 @@ jQuery(function ($) {
         const id = $(this).data('afm-file-card');
         if ($(e.target).closest('[data-afm-file-menu]').length) return;
         loadFilePreview(id);
+    });
+
+    $root.on('click', '[data-afm-link-card]', function (e) {
+        const id = $(this).data('afm-link-card');
+        if ($(e.target).closest('[data-afm-link-menu]').length) return;
+        const link = findLinkById(id);
+        if (link && link.url) {
+            window.open(link.url, '_blank', 'noopener');
+        }
     });
 
     $root.on('click', '[data-afm-action="close-drawer"]', closeDrawer);
@@ -835,6 +955,17 @@ jQuery(function ($) {
         });
     });
 
+    $root.on('click', '[data-afm-action="new-link"]', function (e) {
+        if (ignoreIfNotFilesTab(e)) return;
+        if (state.currentFolderId <= 0) return;
+        closeMenu();
+        openLinkModal({
+            title: 'New link',
+            primaryLabel: 'Add link',
+            mode: 'create-link',
+        });
+    });
+
     $root.on('click', '[data-afm-folder-menu]', function () {
         if (!AnchorFM.isAdmin) return;
         const folderId = Number($(this).data('afm-folder-menu'));
@@ -871,6 +1002,16 @@ jQuery(function ($) {
             { action: 'permissions-file', label: 'Permissions', icon: 'lock' },
             { action: 'delete-file', label: 'Delete', icon: 'trash', danger: true },
         ], { fileId });
+    });
+
+    $root.on('click', '[data-afm-link-menu]', function () {
+        if (!AnchorFM.isAdmin) return;
+        const linkId = Number($(this).data('afm-link-menu'));
+        closeMenu();
+        openMenu(this, [
+            { action: 'edit-link', label: 'Edit', icon: 'edit' },
+            { action: 'delete-link', label: 'Delete', icon: 'trash', danger: true },
+        ], { linkId });
     });
 
     $root.on('click', '[data-afm-action="permissions-file"]', function () {

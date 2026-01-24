@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.09
+ * Version: 2.9.10
  * Author: Anchor Corps
  */
 
@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) exit;
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.2.0';
+    const VERSION = '2.9.09';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
@@ -40,6 +40,9 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_move_file', [$this, 'ajax_move_file']);
         add_action('wp_ajax_anchor_fm_move_folder', [$this, 'ajax_move_folder']);
         add_action('wp_ajax_anchor_fm_download_folder', [$this, 'ajax_download_folder']);
+        add_action('wp_ajax_anchor_fm_create_link', [$this, 'ajax_create_link']);
+        add_action('wp_ajax_anchor_fm_update_link', [$this, 'ajax_update_link']);
+        add_action('wp_ajax_anchor_fm_delete_link', [$this, 'ajax_delete_link']);
 
         add_action('wp_ajax_anchor_fm_get_permissions', [$this, 'ajax_get_permissions']);
         add_action('wp_ajax_anchor_fm_set_permissions', [$this, 'ajax_set_permissions']);
@@ -57,6 +60,8 @@ class Anchor_Private_File_Manager {
 
         add_action('admin_menu', [$this, 'register_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
+
+        $this->maybe_upgrade_db();
     }
 
     public function bootstrap_update_checker() {
@@ -260,6 +265,7 @@ class Anchor_Private_File_Manager {
 
         self::ensure_upload_storage();
         self::ensure_product_docs_folder();
+        self::ensure_links_table();
     }
 
     private static function ensure_upload_storage() {
@@ -304,6 +310,36 @@ class Anchor_Private_File_Manager {
         $folder_id = (int) $wpdb->insert_id;
         update_option(self::OPT_PD_FOLDER_ID, $folder_id);
         return $folder_id;
+    }
+
+    private static function ensure_links_table() {
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+        $links = self::table('links');
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        dbDelta("
+            CREATE TABLE {$links} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                folder_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                title VARCHAR(255) NOT NULL,
+                url TEXT NOT NULL,
+                created_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                KEY folder_id (folder_id)
+            ) {$charset_collate};
+        ");
+    }
+
+    private function maybe_upgrade_db() {
+        $installed = (string) get_option(self::OPT_DB_VERSION, '0');
+        if (version_compare($installed, self::VERSION, '<')) {
+            self::ensure_links_table();
+            update_option(self::OPT_DB_VERSION, self::VERSION);
+        }
     }
 
     public function enqueue_assets() {
@@ -490,6 +526,12 @@ class Anchor_Private_File_Manager {
                                 <span class="dashicons dashicons-update" aria-hidden="true"></span>
                                 <?php esc_html_e('Refresh', 'anchor-private-file-manager'); ?>
                             </button>
+                            <?php if (current_user_can('administrator')) : ?>
+                            <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="new-link" data-apfm-files-only>
+                                <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
+                                <?php esc_html_e('New link', 'anchor-private-file-manager'); ?>
+                            </button>
+                            <?php endif; ?>
                             <div class="afm__upload" data-apfm-upload hidden>
                                 <input type="file" multiple class="afm__fileInput" data-afm-file-input>
                                 <button type="button" class="afm__btn afm__btn--primary" data-afm-action="upload">
@@ -717,6 +759,12 @@ class Anchor_Private_File_Manager {
         return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$files} WHERE id = %d", $file_id));
     }
 
+    private function get_link_row($link_id) {
+        global $wpdb;
+        $links = self::table('links');
+        return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$links} WHERE id = %d", $link_id));
+    }
+
     private function get_effective_capability($user_id, $entity_type, $entity_id) {
         if (user_can($user_id, 'administrator')) {
             return 'manage';
@@ -930,6 +978,18 @@ class Anchor_Private_File_Manager {
         return $this->cap_rank($this->get_effective_capability($user_id, 'file', $file_id)) >= 3;
     }
 
+    private function can_user_view_link($user_id, $link_id) {
+        $link = $this->get_link_row($link_id);
+        if (!$link) return false;
+        return $this->can_user_view_folder($user_id, (int) $link->folder_id);
+    }
+
+    private function can_user_manage_link($user_id, $link_id) {
+        $link = $this->get_link_row($link_id);
+        if (!$link) return false;
+        return $this->can_user_manage_folder($user_id, (int) $link->folder_id);
+    }
+
     private function notify_upload($file_row, $actor_user_id) {
         // Hard-disabled by default. Toggle via the anchor_fm_enable_upload_email filter if ever needed.
         if (!apply_filters('anchor_fm_enable_upload_email', false)) return;
@@ -1097,11 +1157,31 @@ class Anchor_Private_File_Manager {
             ];
         }
 
+        $link_list = [];
+        if ($folder_id > 0) {
+            $links_table = self::table('links');
+            $link_rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, folder_id, title, url, created_by, created_at FROM {$links_table} WHERE folder_id = %d ORDER BY created_at DESC",
+                $folder_id
+            ));
+            foreach ((array) $link_rows as $l) {
+                if (!$this->can_user_view_link($user_id, (int) $l->id)) continue;
+                $link_list[] = [
+                    'id' => (int) $l->id,
+                    'title' => $l->title,
+                    'url' => $l->url,
+                    'createdBy' => !empty($l->created_by) ? (int) $l->created_by : 0,
+                    'createdAt' => $l->created_at,
+                ];
+            }
+        }
+
         $cap = $folder_id === 0 ? (user_can($user_id, 'administrator') ? 'manage' : 'view') : $this->get_effective_capability($user_id, 'folder', $folder_id);
         $this->json_success([
             'folderId' => $folder_id,
             'breadcrumbs' => $folder_id === 0 ? [] : $this->build_breadcrumbs($folder_id),
             'folders' => $subfolders,
+            'links' => $link_list,
             'files' => $file_list,
             'capability' => $cap,
             'isProductDocs' => $folder_id === $product_docs_id,
@@ -1386,6 +1466,80 @@ class Anchor_Private_File_Manager {
 
         $this->log_activity($user_id, 'delete_file', 'file', $file_id, ['name' => $file->original_name]);
         $this->json_success(['fileId' => $file_id]);
+    }
+
+    public function ajax_create_link() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+
+        $user_id = get_current_user_id();
+        if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
+
+        $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
+        $url = isset($_POST['url']) ? esc_url_raw((string) $_POST['url']) : '';
+        if ($folder_id <= 0 || $title === '' || $url === '') $this->json_error('Missing fields');
+        if (!$this->can_user_manage_folder($user_id, $folder_id)) $this->json_error('Forbidden', 403);
+
+        global $wpdb;
+        $links = self::table('links');
+        $now = current_time('mysql');
+        $wpdb->insert($links, [
+            'folder_id' => $folder_id,
+            'title' => $title,
+            'url' => $url,
+            'created_by' => $user_id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], ['%d','%s','%s','%d','%s','%s']);
+        $link_id = (int) $wpdb->insert_id;
+
+        $this->log_activity($user_id, 'create_link', 'link', $link_id, ['folder_id' => $folder_id, 'title' => $title]);
+        $this->json_success(['linkId' => $link_id]);
+    }
+
+    public function ajax_update_link() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+
+        $user_id = get_current_user_id();
+        if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
+
+        $link_id = isset($_POST['link_id']) ? (int) $_POST['link_id'] : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
+        $url = isset($_POST['url']) ? esc_url_raw((string) $_POST['url']) : '';
+        if ($link_id <= 0 || $title === '' || $url === '') $this->json_error('Missing fields');
+        if (!$this->can_user_manage_link($user_id, $link_id)) $this->json_error('Forbidden', 403);
+
+        global $wpdb;
+        $links = self::table('links');
+        $wpdb->update($links, [
+            'title' => $title,
+            'url' => $url,
+            'updated_at' => current_time('mysql'),
+        ], ['id' => $link_id], ['%s','%s','%s'], ['%d']);
+
+        $this->log_activity($user_id, 'update_link', 'link', $link_id, ['title' => $title]);
+        $this->json_success(['linkId' => $link_id]);
+    }
+
+    public function ajax_delete_link() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+
+        $user_id = get_current_user_id();
+        if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
+
+        $link_id = isset($_POST['link_id']) ? (int) $_POST['link_id'] : 0;
+        if ($link_id <= 0) $this->json_error('Missing link_id');
+        if (!$this->can_user_manage_link($user_id, $link_id)) $this->json_error('Forbidden', 403);
+
+        global $wpdb;
+        $links = self::table('links');
+        $wpdb->delete($links, ['id' => $link_id], ['%d']);
+
+        $this->log_activity($user_id, 'delete_link', 'link', $link_id, null);
+        $this->json_success(['linkId' => $link_id]);
     }
 
     public function ajax_move_file() {
