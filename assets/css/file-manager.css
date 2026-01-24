@@ -90,8 +90,8 @@
 .afm__resizer {
   position: absolute;
   top: 0;
-  right: -5px;
-  width: 10px;
+  right: -10px;
+  width: 20px;
   height: 100%;
   cursor: col-resize;
   z-index: 2;
@@ -100,7 +100,7 @@
 .afm__resizer::after {
   content: "";
   position: absolute;
-  inset: 10px 4px;
+  inset: 10px 8px;
   border-radius: 999px;
   background: transparent;
   transition: background 160ms ease;

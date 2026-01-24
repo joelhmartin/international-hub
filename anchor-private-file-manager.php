@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.14
+ * Version: 2.9.15
  * Author: Anchor Corps
  */
 
