@@ -887,7 +887,7 @@ jQuery(function ($) {
     $(document).on('click', function (e) {
         if ($menu.prop('hidden')) return;
         if ($(e.target).closest('[data-afm-menu]').length) return;
-        if ($(e.target).closest('[data-afm-folder-menu],[data-afm-file-menu]').length) return;
+        if ($(e.target).closest('[data-afm-folder-menu],[data-afm-file-menu],[data-afm-link-menu]').length) return;
         closeMenu();
     });
 
@@ -1008,8 +1008,9 @@ jQuery(function ($) {
         ], { fileId });
     });
 
-    $root.on('click', '[data-afm-link-menu]', function () {
+    $root.on('click', '[data-afm-link-menu]', function (e) {
         if (!AnchorFM.isAdmin) return;
+        e.stopPropagation();
         const linkId = Number($(this).data('afm-link-menu'));
         closeMenu();
         openMenu(this, [
