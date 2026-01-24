@@ -28,6 +28,8 @@ jQuery(function ($) {
     const $fileInput = $root.find('[data-afm-file-input]');
     const $uploadBtn = $root.find('[data-afm-action="upload"]');
     const $linkBtn = $root.find('[data-afm-action="new-link"]');
+    const $frame = $root.find('.afm__frame');
+    const $resizer = $root.find('[data-afm-resizer]');
 
     const productDocsFolderId = Number(AnchorFM.productDocsFolderId || 0);
     const state = {
@@ -50,6 +52,10 @@ jQuery(function ($) {
         parentById: {},
         childrenByParent: {},
     };
+
+    const SIDEBAR_MIN = 220;
+    const SIDEBAR_MAX = 420;
+    let isResizing = false;
 
     function api(action, data) {
         return $.post(AnchorFM.ajax, Object.assign({ action, nonce: AnchorFM.nonce }, data || {}));
@@ -75,6 +81,15 @@ jQuery(function ($) {
             i++;
         }
         return (Math.round(v * 10) / 10) + ' ' + units[i];
+    }
+
+    function setSidebarWidth(width) {
+        if (!$root.length) return;
+        $root.get(0).style.setProperty('--afm-sidebar-width', `${width}px`);
+    }
+
+    function clamp(num, min, max) {
+        return Math.min(max, Math.max(min, num));
     }
 
     function capRank(cap) {
@@ -845,6 +860,50 @@ jQuery(function ($) {
         }
         return false;
     };
+
+    const getPageX = (evt) => {
+        const oe = evt && evt.originalEvent;
+        if (oe && oe.touches && oe.touches.length) return oe.touches[0].pageX;
+        return evt.pageX;
+    };
+
+    const onResize = (evt) => {
+        if (!isResizing) return;
+        const pageX = getPageX(evt);
+        const frameOffset = $frame.offset();
+        if (!frameOffset || pageX === undefined) return;
+        const nextWidth = clamp(pageX - frameOffset.left, SIDEBAR_MIN, SIDEBAR_MAX);
+        setSidebarWidth(nextWidth);
+        if (evt && evt.preventDefault) evt.preventDefault();
+    };
+
+    const stopResize = () => {
+        if (!isResizing) return;
+        isResizing = false;
+        $root.removeClass('afm--resizing');
+        $(document).off('.afmResize');
+    };
+
+    if ($resizer.length && $frame.length) {
+        $resizer.on('mousedown', function (e) {
+            if (e.which && e.which !== 1) return;
+            e.preventDefault();
+            isResizing = true;
+            $root.addClass('afm--resizing');
+            $(document).on('mousemove.afmResize', onResize);
+            $(document).on('mouseup.afmResize', stopResize);
+            onResize(e);
+        });
+
+        $resizer.on('touchstart', function (e) {
+            e.preventDefault();
+            isResizing = true;
+            $root.addClass('afm--resizing');
+            $(document).on('touchmove.afmResize', onResize);
+            $(document).on('touchend.afmResize touchcancel.afmResize', stopResize);
+            onResize(e);
+        });
+    }
 
     $root.on('click', '[data-afm-tree-toggle]', function (e) {
         e.preventDefault();

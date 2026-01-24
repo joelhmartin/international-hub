@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.12
+ * Version: 2.9.13
  * Author: Anchor Corps
  */
 
@@ -509,6 +509,7 @@ class Anchor_Private_File_Manager {
                     </div>
                     <?php endif; ?>
                     <div class="afm__tree" data-afm-tree></div>
+                    <div class="afm__resizer" data-afm-resizer aria-hidden="true"></div>
                 </aside>
 
                 <main class="afm__main" aria-label="<?php esc_attr_e('Account content', 'anchor-private-file-manager'); ?>">

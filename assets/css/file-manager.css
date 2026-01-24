@@ -15,6 +15,7 @@
   --afm-radius: 16px;
   --afm-radius-sm: 12px;
   --afm-gap: 14px;
+  --afm-sidebar-width: 280px;
   color: var(--afm-text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
     "Segoe UI Emoji";
@@ -29,12 +30,12 @@
   box-shadow: var(--afm-shadow);
   min-height: 620px;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 0px;
+  grid-template-columns: var(--afm-sidebar-width) minmax(0, 1fr) 0px;
   transition: grid-template-columns 160ms ease;
 }
 
 .afm.afm--drawerOpen .afm__frame {
-  grid-template-columns: 280px minmax(0, 1fr) 420px;
+  grid-template-columns: var(--afm-sidebar-width) minmax(0, 1fr) 420px;
 }
 
 .afm__sidebar {
@@ -44,6 +45,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--afm-gap);
+  max-height: 80vh;
+  overflow-y: auto;
+  position: relative;
 }
 
 .afm__brand {
@@ -81,6 +85,34 @@
   flex: 1;
   overflow: auto;
   padding-right: 6px;
+}
+
+.afm__resizer {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.afm__resizer::after {
+  content: "";
+  position: absolute;
+  inset: 10px 4px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 160ms ease;
+}
+
+.afm__resizer:hover::after,
+.afm--resizing .afm__resizer::after {
+  background: rgba(10, 18, 32, 0.15);
+}
+
+.afm--resizing {
+  user-select: none;
 }
 
 .afm__treeNode {
