@@ -984,6 +984,12 @@
   opacity: 0.35;
 }
 
+.apfm--hide-files [data-afm-panel="files"],
+.apfm--hide-files [data-afm-panel="product-docs"],
+.apfm--hide-files [data-afm-drawer] {
+  display: none !important;
+}
+
 @media (max-width: 980px) {
   .afm__frame {
     grid-template-columns: 1fr;

@@ -80,6 +80,7 @@ jQuery(function ($) {
         }
         $root.toggleClass('apfm--tab-files', isFiles);
         $root.toggleClass('apfm--lock-files', !isFiles);
+        $root.toggleClass('apfm--hide-files', !isFiles);
     }
 
     function showPanels(tab) {
