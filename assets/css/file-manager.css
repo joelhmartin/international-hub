@@ -274,7 +274,8 @@
 }
 
 .afm:not(.afm--canUpload) .afm__upload {
-    display: none;
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .afm:not(.afm--canCreateFolder) [data-afm-action="new-folder"] {

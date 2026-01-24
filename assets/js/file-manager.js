@@ -26,6 +26,7 @@ jQuery(function ($) {
     const $dropzone = $root.find('[data-afm-dropzone]');
     const $content = $root.find('.afm__content');
     const $fileInput = $root.find('[data-afm-file-input]');
+    const $uploadBtn = $root.find('[data-afm-action="upload"]');
     const $linkBtn = $root.find('[data-afm-action="new-link"]');
 
     const productDocsFolderId = Number(AnchorFM.productDocsFolderId || 0);
@@ -230,6 +231,9 @@ jQuery(function ($) {
         const canAddLink = canManage && state.currentFolderId > 0;
         $root.toggleClass('afm--canCreateFolder', canManage);
         $root.toggleClass('afm--canUpload', canUpload);
+        if ($uploadBtn.length) {
+            $uploadBtn.prop('disabled', !canUpload);
+        }
         if ($linkBtn.length) {
             $linkBtn.prop('disabled', !canAddLink);
         }
@@ -392,7 +396,7 @@ jQuery(function ($) {
         api('anchor_fm_list', { folder_id: state.currentFolderId }).done(res => {
             if (!res || !res.success) return;
             renderBreadcrumbs(res.data.breadcrumbs);
-            renderGrid({ folders: res.data.folders, files: res.data.files }, res.data.capability);
+            renderGrid({ folders: res.data.folders, links: res.data.links, files: res.data.files }, res.data.capability);
             $root.trigger('anchorfm:folderLoaded', {
                 folderId: state.currentFolderId,
                 capability: res.data.capability,
