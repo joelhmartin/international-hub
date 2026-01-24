@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.03
+ * Version: 2.9.04
  * Author: Anchor Corps
  */
 
@@ -18,6 +18,7 @@ class Anchor_Private_File_Manager {
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
 
     private static $instance = null;
+    private $portal_rendered = false;
 
     public function __construct() {
         add_shortcode('anchor_file_manager', [$this, 'render_file_manager']);
@@ -412,6 +413,11 @@ class Anchor_Private_File_Manager {
         if (!is_user_logged_in()) {
             return '<p>You must be logged in to access your documents.</p>';
         }
+
+        if ($this->portal_rendered) {
+            return '';
+        }
+        $this->portal_rendered = true;
 
         $user = wp_get_current_user();
 
