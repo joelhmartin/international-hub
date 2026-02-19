@@ -345,6 +345,11 @@ class Anchor_Private_File_Manager {
     public function enqueue_assets() {
         if (!is_user_logged_in()) return;
         if (!$this->should_enqueue_assets()) return;
+        $this->do_enqueue_assets();
+    }
+
+    private function do_enqueue_assets() {
+        if (wp_script_is('anchor-file-manager', 'enqueued')) return;
 
         $css_path = plugin_dir_path(__FILE__) . 'assets/css/file-manager.css';
         $css_ver = file_exists($css_path) ? (string) filemtime($css_path) : self::VERSION;
@@ -454,6 +459,8 @@ class Anchor_Private_File_Manager {
             return '';
         }
         $this->portal_rendered = true;
+
+        $this->do_enqueue_assets();
 
         $user = wp_get_current_user();
 
