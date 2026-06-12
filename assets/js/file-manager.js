@@ -654,6 +654,46 @@ jQuery(function ($) {
         startVideoTracking(activePlayer, videoId);
     }
 
+    let trackState = null;
+
+    function startVideoTracking(player, videoId) {
+        trackState = { videoId: videoId, lastTime: 0, accum: 0, duration: 0, newSession: true };
+        player.getDuration().then(d => { trackState.duration = Math.floor(d || 0); }).catch(() => {});
+
+        player.on('timeupdate', function (data) {
+            if (!trackState) return;
+            const t = Math.floor(data.seconds || 0);
+            const delta = t - trackState.lastTime;
+            if (delta > 0 && delta <= 2) trackState.accum += delta;
+            trackState.lastTime = t;
+            if (trackState.accum >= 10) flushProgress(false);
+        });
+        player.on('pause', function () { flushProgress(false); });
+        player.on('ended', function () { flushProgress(false); });
+    }
+
+    function flushProgress(force) {
+        if (!trackState) return;
+        if (!force && trackState.accum <= 0) return;
+        const payload = {
+            video_id: trackState.videoId,
+            point: trackState.lastTime,
+            delta: trackState.accum,
+            duration: trackState.duration,
+            new_session: trackState.newSession ? 1 : 0,
+        };
+        trackState.accum = 0;
+        trackState.newSession = false;
+        api('anchor_fm_vimeo_progress', payload);
+    }
+
+    function stopVideoTracking() {
+        flushProgress(true);
+        if (activePlayer && activePlayer.unload) { try { activePlayer.unload(); } catch (e) {} }
+        activePlayer = null;
+        trackState = null;
+    }
+
     function openPermissions(entityType, entityId) {
         state.selectedEntity = { entityType, entityId: Number(entityId) };
         $modalBody.html('<div class="afm__skeleton afm__skeleton--share"></div>');
