@@ -51,6 +51,10 @@ jQuery(function ($) {
         expandedNodes: new Set(),
         parentById: {},
         childrenByParent: {},
+        sortKey: 'name',
+        sortDir: 'asc',
+        expandedRows: {},
+        selectedRows: new Set(),
     };
 
     const SIDEBAR_MIN = 220;
@@ -237,71 +241,108 @@ jQuery(function ($) {
         return String(name || '').toLowerCase().includes(q);
     }
 
-    function renderGrid(list, capability) {
-        state.currentList = list;
-        state.currentCapability = capability || 'view';
+    function kindLabel(kind, mime) {
+        if (kind === 'folder') return 'Folder';
+        if (kind === 'link') return 'Link';
+        if (kind === 'video') return 'Video';
+        return (mime || 'File');
+    }
 
-        const canManage = capRank(state.currentCapability) >= 3;
-        const canUpload = canManage && state.currentFolderId > 0;
-        const canAddLink = canManage && state.currentFolderId > 0;
-        $root.toggleClass('afm--canCreateFolder', canManage);
-        $root.toggleClass('afm--canUpload', canUpload);
-        if ($uploadBtn.length) {
-            $uploadBtn.prop('disabled', !canUpload);
+    function rowKey(kind, id) { return kind + ':' + id; }
+
+    function rowIcon(item) {
+        if (item.kind === 'folder') return 'category';
+        if (item.kind === 'link') return 'admin-links';
+        if (item.kind === 'video') return 'video-alt3';
+        return iconForMime(item.mime);
+    }
+
+    function currentRows(list) {
+        const rows = [];
+        (list.folders || []).forEach(f => rows.push({ kind: 'folder', id: f.id, name: f.name, isPrivate: f.isPrivate }));
+        (list.videos || []).forEach(v => rows.push({ kind: 'video', id: v.id, name: v.title, vimeoId: v.vimeoId, createdAt: v.createdAt }));
+        (list.links || []).forEach(l => rows.push({ kind: 'link', id: l.id, name: l.title, url: l.url, createdAt: l.createdAt }));
+        (list.files || []).forEach(f => rows.push({ kind: 'file', id: f.id, name: f.name, mime: f.mime, size: f.size, createdAt: f.createdAt }));
+        return rows;
+    }
+
+    function sortRows(rows) {
+        const dir = state.sortDir === 'desc' ? -1 : 1;
+        const folderRank = r => (r.kind === 'folder' ? 0 : 1);
+        return rows.slice().sort((a, b) => {
+            if (folderRank(a) !== folderRank(b)) return folderRank(a) - folderRank(b);
+            let av, bv;
+            switch (state.sortKey) {
+                case 'size': av = a.size || 0; bv = b.size || 0; break;
+                case 'kind': av = kindLabel(a.kind, a.mime); bv = kindLabel(b.kind, b.mime); break;
+                case 'modified': av = a.createdAt || ''; bv = b.createdAt || ''; break;
+                default: av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase();
+            }
+            if (av < bv) return -1 * dir;
+            if (av > bv) return 1 * dir;
+            return 0;
+        });
+    }
+
+    function rowHtml(item, depth) {
+        const pad = 12 + (depth || 0) * 20;
+        const selected = state.selectedRows.has(rowKey(item.kind, item.id)) ? ' is-selected' : '';
+        const disclosure = item.kind === 'folder'
+            ? `<button type="button" class="afm__rowDisclosure" data-afm-row-expand="${item.id}" aria-label="Expand"><span class="dashicons dashicons-arrow-right-alt2"></span></button>`
+            : `<span class="afm__rowDisclosure afm__rowDisclosure--empty"></span>`;
+        const sizeText = item.kind === 'file' ? esc(fmtSize(item.size)) : '—';
+        const modified = item.createdAt ? esc(String(item.createdAt).slice(0, 10)) : '—';
+        return `
+            <div class="afm__row afm__row--${item.kind}${selected}"
+                 data-afm-row="${item.kind}:${item.id}"
+                 data-afm-row-kind="${item.kind}" data-afm-row-id="${item.id}"
+                 style="--afm-row-pad:${pad}px" tabindex="-1">
+                <div class="afm__rowCell afm__rowName">
+                    ${disclosure}
+                    <span class="afm__rowIcon dashicons dashicons-${rowIcon(item)}"></span>
+                    <span class="afm__rowLabel" data-afm-row-label>${esc(item.name)}</span>
+                </div>
+                <div class="afm__rowCell afm__rowKind">${esc(kindLabel(item.kind, item.mime))}</div>
+                <div class="afm__rowCell afm__rowSize">${sizeText}</div>
+                <div class="afm__rowCell afm__rowModified">${modified}</div>
+                <div class="afm__rowCell afm__rowActions">
+                    <button type="button" class="afm__kebab" data-afm-row-menu="${item.kind}:${item.id}"><span class="dashicons dashicons-ellipsis"></span></button>
+                </div>
+            </div>`;
+    }
+
+    function headerHtml() {
+        const arrow = k => state.sortKey === k ? (state.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+        return `
+            <div class="afm__listHead">
+                <button type="button" class="afm__rowCell afm__rowName afm__sortBtn" data-afm-sort="name">Name${arrow('name')}</button>
+                <button type="button" class="afm__rowCell afm__rowKind afm__sortBtn" data-afm-sort="kind">Kind${arrow('kind')}</button>
+                <button type="button" class="afm__rowCell afm__rowSize afm__sortBtn" data-afm-sort="size">Size${arrow('size')}</button>
+                <button type="button" class="afm__rowCell afm__rowModified afm__sortBtn" data-afm-sort="modified">Modified${arrow('modified')}</button>
+                <div class="afm__rowCell afm__rowActions"></div>
+            </div>`;
+    }
+
+    function renderList(list, capability) {
+        state.currentList = list || { folders: [], files: [], links: [], videos: [] };
+        state.currentCapability = capability || state.currentCapability;
+        const rows = sortRows(currentRows(state.currentList));
+        if (!rows.length) {
+            $grid.html(headerHtml() + `<div class="afm__empty">${esc(AnchorFM.i18n.noFiles)}</div>`);
+            return;
         }
-        if ($linkBtn.length) {
-            $linkBtn.prop('disabled', !canAddLink);
-        }
-
-        const folders = (list.folders || []).filter(f => matchesSearch(f.name) && (!productDocsFolderId || Number(f.id) !== productDocsFolderId));
-        const links = (list.links || []).filter(l => matchesSearch(l.title));
-        const files = (list.files || []).filter(f => matchesSearch(f.name));
-
-        const canAdminAct = !!AnchorFM.isAdmin;
-        const folderCards = folders.map(f => `
-            <div class="afm__card afm__card--folder" data-afm-folder-card="${f.id}" draggable="${AnchorFM.isAdmin ? 'true' : 'false'}" title="${esc(f.name)}">
-                <div class="afm__cardIcon dashicons dashicons-category" aria-hidden="true"></div>
-                <div class="afm__cardMain">
-                    <div class="afm__cardTitle">${esc(f.name)}</div>
-                    <div class="afm__cardSub">${f.isPrivate ? 'Private' : 'Folder'}</div>
-                </div>
-                ${canAdminAct ? `<button type="button" class="afm__kebab" data-afm-folder-menu="${f.id}" aria-label="Folder actions">
-                    <span class="dashicons dashicons-ellipsis" aria-hidden="true"></span>
-                </button>` : ''}
-            </div>
-        `).join('');
-
-        const linkCards = links.map(l => `
-            <div class="afm__card afm__card--link" data-afm-link-card="${l.id}" title="${esc(l.url)}">
-                <div class="afm__cardIcon dashicons dashicons-admin-links" aria-hidden="true"></div>
-                <div class="afm__cardMain">
-                    <div class="afm__cardTitle">${esc(l.title)}</div>
-                    <div class="afm__cardSub">${esc(l.url)}</div>
-                </div>
-                ${canAdminAct ? `<button type="button" class="afm__kebab" data-afm-link-menu="${l.id}" aria-label="Link actions">
-                    <span class="dashicons dashicons-ellipsis" aria-hidden="true"></span>
-                </button>` : ''}
-            </div>
-        `).join('');
-
-        const fileCards = files.map(f => `
-            <div class="afm__card afm__card--file" data-afm-file-card="${f.id}" draggable="${AnchorFM.isAdmin ? 'true' : 'false'}">
-                <div class="afm__cardIcon dashicons dashicons-${iconForMime(f.mime)}" aria-hidden="true"></div>
-                <div class="afm__cardMain">
-                    <div class="afm__cardTitle">${esc(f.name)}</div>
-                    <div class="afm__cardSub">${esc(f.mime)} • ${fmtSize(f.size)}</div>
-                </div>
-                ${canAdminAct ? `<button type="button" class="afm__kebab" data-afm-file-menu="${f.id}" aria-label="File actions">
-                    <span class="dashicons dashicons-ellipsis" aria-hidden="true"></span>
-                </button>` : ''}
-            </div>
-        `).join('');
-
-        const empty = (!folderCards && !linkCards && !fileCards)
-            ? `<div class="afm__empty">${esc(AnchorFM.i18n.noFiles)}</div>`
-            : '';
-
-        $grid.html(folderCards + linkCards + fileCards + empty);
+        let html = headerHtml() + '<div class="afm__list" tabindex="0">';
+        rows.forEach(item => {
+            html += rowHtml(item, 0);
+            if (item.kind === 'folder' && state.expandedRows[item.id]) {
+                state.expandedRows[item.id].forEach(child => { html += rowHtml(child, 1); });
+            }
+        });
+        html += '</div>';
+        $grid.html(html);
+        Object.keys(state.expandedRows).forEach(fid => {
+            $grid.find(`[data-afm-row-expand="${fid}"]`).addClass('is-open');
+        });
     }
 
     function openDrawer() {
@@ -411,7 +452,7 @@ jQuery(function ($) {
         api('anchor_fm_list', { folder_id: state.currentFolderId }).done(res => {
             if (!res || !res.success) return;
             renderBreadcrumbs(res.data.breadcrumbs);
-            renderGrid({ folders: res.data.folders, links: res.data.links, files: res.data.files }, res.data.capability);
+            renderList({ folders: res.data.folders, links: res.data.links, files: res.data.files }, res.data.capability);
             $root.trigger('anchorfm:folderLoaded', {
                 folderId: state.currentFolderId,
                 capability: res.data.capability,
@@ -1002,7 +1043,7 @@ jQuery(function ($) {
     $search.on('input', function (e) {
         if (ignoreIfNotFilesTab(e)) return;
         state.search = $(this).val();
-        renderGrid(state.currentList, state.currentCapability);
+        renderList(state.currentList, state.currentCapability);
     });
 
     $root.on('click', '[data-afm-action="new-folder"]', function (e) {
@@ -1081,6 +1122,16 @@ jQuery(function ($) {
     $root.on('click', '[data-afm-action="permissions-file"]', function () {
         const fileId = Number($(this).data('afm-file'));
         openPermissions('file', fileId);
+    });
+
+    $root.on('click', '[data-afm-sort]', function () {
+        const key = $(this).data('afm-sort');
+        if (state.sortKey === key) {
+            state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            state.sortKey = key; state.sortDir = 'asc';
+        }
+        renderList(state.currentList, state.currentCapability);
     });
 
     // Drag to move files into folders (admin/manage only)
