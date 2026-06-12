@@ -214,14 +214,11 @@ jQuery(function ($) {
     }
 
     function renderBreadcrumbs(crumbs) {
-        if (!crumbs || !crumbs.length) {
-            $breadcrumbs.html('');
-            return;
-        }
-        const html = crumbs.map((c, idx) => {
-            const sep = idx ? `<span class="afm__crumbSep" aria-hidden="true">/</span>` : '';
-            return `${sep}<span class="afm__crumbText">${esc(c.name)}</span>`;
-        }).join('');
+        let html = `<button type="button" class="afm__crumb" data-afm-crumb="0">Home</button>`;
+        (crumbs || []).forEach(c => {
+            html += `<span class="afm__crumbSep">/</span>`;
+            html += `<button type="button" class="afm__crumb" data-afm-crumb="${c.id}">${esc(c.name)}</button>`;
+        });
         $breadcrumbs.html(html);
     }
 
@@ -1132,6 +1129,10 @@ jQuery(function ($) {
             state.sortKey = key; state.sortDir = 'asc';
         }
         renderList(state.currentList, state.currentCapability);
+    });
+
+    $root.on('click', '[data-afm-crumb]', function () {
+        loadFolder(Number($(this).data('afm-crumb')));
     });
 
     $root.on('click', '[data-afm-row-expand]', function (e) {
