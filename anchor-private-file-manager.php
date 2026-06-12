@@ -1352,7 +1352,7 @@ class Anchor_Private_File_Manager {
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
         $user_id = get_current_user_id();
 
-        $term = isset($_POST['term']) ? trim((string) $_POST['term']) : '';
+        $term = isset($_POST['term']) ? sanitize_text_field((string) $_POST['term']) : '';
         if ($term === '' || mb_strlen($term) < 2) {
             $this->json_success(['results' => [], 'truncated' => false]);
         }
