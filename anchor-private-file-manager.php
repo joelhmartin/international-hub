@@ -492,10 +492,19 @@ class Anchor_Private_File_Manager {
             true
         );
 
+        wp_enqueue_script(
+            'anchor-fm-vimeo-player',
+            'https://player.vimeo.com/api/player.js',
+            [],
+            null,
+            true
+        );
+
         wp_localize_script('anchor-file-manager', 'AnchorFM', [
             'ajax' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce(self::NONCE_ACTION),
             'isAdmin' => current_user_can('administrator'),
+            'vimeoEnabled' => true,
             'productDocsFolderId' => $product_docs_id,
             'user' => [
                 'id' => get_current_user_id(),
