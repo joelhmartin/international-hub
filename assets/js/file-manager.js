@@ -453,6 +453,7 @@ jQuery(function ($) {
     }
 
     function loadFolder(folderId) {
+        state.selectedRows.clear();
         state.currentFolderId = Number(folderId);
         openBranch(state.currentFolderId);
         renderTree(state.tree);
@@ -1494,11 +1495,85 @@ jQuery(function ($) {
         else if (kind === 'link') { const l = findRow('link', id); if (l && l.url) window.open(l.url, '_blank', 'noopener'); }
     });
 
-    // TEMP — replaced by real multi-select in a later phase.
-    function selectRow($row) {
-        $grid.find('.afm__row').removeClass('is-active');
-        $row.addClass('is-active');
+    function selectRow($row, e) {
+        const key = $row.data('afm-row');
+        if (e && (e.metaKey || e.ctrlKey)) {
+            if (state.selectedRows.has(key)) state.selectedRows.delete(key); else state.selectedRows.add(key);
+        } else if (e && e.shiftKey && state.lastSelectedKey) {
+            selectRange(state.lastSelectedKey, key);
+        } else {
+            state.selectedRows.clear(); state.selectedRows.add(key);
+        }
+        state.lastSelectedKey = key;
+        refreshSelectionUI();
     }
+
+    function selectRange(fromKey, toKey) {
+        const keys = $grid.find('.afm__row').map(function () { return $(this).data('afm-row'); }).get();
+        const a = keys.indexOf(fromKey), b = keys.indexOf(toKey);
+        if (a < 0 || b < 0) { state.selectedRows.add(toKey); return; }
+        const lo = Math.min(a, b), hi = Math.max(a, b);
+        for (let i = lo; i <= hi; i++) state.selectedRows.add(keys[i]);
+    }
+
+    function refreshSelectionUI() {
+        $grid.find('.afm__row').each(function () {
+            $(this).toggleClass('is-selected', state.selectedRows.has($(this).data('afm-row')));
+        });
+        renderBulkBar();
+    }
+
+    function renderBulkBar() {
+        const n = state.selectedRows.size;
+        let $bar = $root.find('[data-afm-bulkbar]');
+        if (n < 2) { $bar.remove(); return; }
+        if (!$bar.length) { $bar = $(`<div class="afm__bulkBar" data-afm-bulkbar></div>`).appendTo($root); }
+        const adminBtns = AnchorFM.isAdmin
+            ? `<button type="button" class="afm__btn afm__btn--danger" data-afm-bulk="delete">Delete</button>`
+            : '';
+        $bar.html(`<span class="afm__bulkCount">${n} selected</span>
+            <button type="button" class="afm__btn afm__btn--secondary" data-afm-bulk="download">Download</button>
+            ${adminBtns}
+            <button type="button" class="afm__btn afm__btn--ghost" data-afm-bulk="clear">Clear</button>`);
+    }
+
+    $root.on('click', '[data-afm-bulk]', function () {
+        const op = $(this).data('afm-bulk');
+        const keys = Array.from(state.selectedRows);
+        if (op === 'clear') { state.selectedRows.clear(); refreshSelectionUI(); return; }
+        if (op === 'download') {
+            keys.forEach(k => {
+                const parts = k.split(':'), kind = parts[0], id = Number(parts[1]);
+                if (kind === 'file') openFileDownload(id);
+                else if (kind === 'folder') downloadFolder(id);
+            });
+            return;
+        }
+        if (op === 'delete' && AnchorFM.isAdmin) {
+            if (!window.confirm(`Delete ${keys.length} item(s)? This cannot be undone.`)) return;
+            Promise.all(keys.map(k => {
+                const parts = k.split(':'), kind = parts[0], id = Number(parts[1]);
+                if (kind === 'file') return api('anchor_fm_delete_file', { file_id: id });
+                if (kind === 'folder') return api('anchor_fm_delete_folder', { folder_id: id });
+                if (kind === 'video') return api('anchor_fm_vimeo_delete', { video_id: id });
+                if (kind === 'link') return api('anchor_fm_delete_link', { link_id: id });
+                return Promise.resolve();
+            })).then(() => { state.selectedRows.clear(); reloadCurrentFolder(); });
+        }
+    });
+
+    function openFileDownload(fileId) {
+        api('anchor_fm_preview', { file_id: fileId }).then(res => {
+            if (res && res.success && res.data.preview && res.data.preview.downloadUrl) {
+                window.location.href = res.data.preview.downloadUrl;
+            }
+        });
+    }
+
+    function downloadFolder(folderId) {
+        window.location = `${AnchorFM.ajax}?action=anchor_fm_download_folder&folder_id=${folderId}&nonce=${AnchorFM.nonce}`;
+    }
+
     function findRow(kind, id) {
         return currentRows(state.currentList).concat(
             Object.values(state.expandedRows).flat()
