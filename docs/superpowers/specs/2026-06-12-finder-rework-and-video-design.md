@@ -238,7 +238,7 @@ without the role), the blocked state shows a **"Request Access"** button.
 - Endpoint `anchor_fm_request_access`: emails a **configurable recipient** with
   the requester's name/email and the requested item's name/path.
 - **Settings page** gains a "Request access recipient" email field, **defaulting
-  to `tiffany@tmjtherapycenter.com`** (the site admin address).
+  to `tiffany@tmjtherapycentre.com`** (the site admin address).
 - Rate-limit per user/item to avoid mail spam (e.g. one request per item per hour).
 
 ## 9. Naming / namespacing requirement (avoid theme collisions)
@@ -278,7 +278,7 @@ All new identifiers introduced here must be distinctive enough not to collide:
 **Changed endpoints:** `anchor_fm_list` adds a `videos[]` array.
 
 **New settings:** Vimeo access token; request-access recipient email
-(default `tiffany@tmjtherapycenter.com`).
+(default `tiffany@tmjtherapycentre.com`).
 
 **Frontend rewrite:** `assets/js/file-manager.js` (grid → rows, expand-in-place,
 global search, context menu, popup viewer, video player + tracking, multi-select,

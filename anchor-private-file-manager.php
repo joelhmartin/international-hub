@@ -20,7 +20,7 @@ class Anchor_Private_File_Manager {
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
     const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
     const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
-    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycenter.com';
+    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
 
     private static $instance = null;
     private $portal_rendered = false;
