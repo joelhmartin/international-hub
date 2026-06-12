@@ -1134,6 +1134,47 @@ jQuery(function ($) {
         renderList(state.currentList, state.currentCapability);
     });
 
+    $root.on('click', '[data-afm-row-expand]', function (e) {
+        e.stopPropagation();
+        const fid = Number($(this).data('afm-row-expand'));
+        if (state.expandedRows[fid]) {
+            delete state.expandedRows[fid];
+            renderList(state.currentList, state.currentCapability);
+            return;
+        }
+        api('anchor_fm_list', { folder_id: fid }).then(res => {
+            if (!res || !res.success) return;
+            state.expandedRows[fid] = currentRows(res.data);
+            renderList(state.currentList, state.currentCapability);
+        });
+    });
+
+    $root.on('click', '[data-afm-row]', function (e) {
+        if ($(e.target).closest('[data-afm-row-expand],[data-afm-row-menu]').length) return;
+        selectRow($(this), e);
+    });
+
+    $root.on('dblclick', '[data-afm-row]', function (e) {
+        if ($(e.target).closest('[data-afm-row-expand],[data-afm-row-menu]').length) return;
+        const kind = $(this).data('afm-row-kind');
+        const id = Number($(this).data('afm-row-id'));
+        if (kind === 'folder') { loadFolder(id); }
+        else if (kind === 'file') { if (typeof openViewer === 'function') openViewer('file', id); }
+        else if (kind === 'video') { if (typeof openViewer === 'function') openViewer('video', id); }
+        else if (kind === 'link') { const l = findRow('link', id); if (l && l.url) window.open(l.url, '_blank', 'noopener'); }
+    });
+
+    // TEMP — replaced by real multi-select in a later phase.
+    function selectRow($row) {
+        $grid.find('.afm__row').removeClass('is-active');
+        $row.addClass('is-active');
+    }
+    function findRow(kind, id) {
+        return currentRows(state.currentList).concat(
+            Object.values(state.expandedRows).flat()
+        ).find(r => r.kind === kind && r.id === id) || null;
+    }
+
     // Drag to move files into folders (admin/manage only)
     let dragFileId = null;
     let dragFolderId = null;
