@@ -1870,6 +1870,91 @@ class Anchor_Private_File_Manager {
         $this->json_success(['videoId' => $video_id]);
     }
 
+    public function ajax_vimeo_progress() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        $point = isset($_POST['point']) ? (int) $_POST['point'] : 0;
+        $delta = isset($_POST['delta']) ? (int) $_POST['delta'] : 0;
+        $duration = isset($_POST['duration']) ? (int) $_POST['duration'] : 0;
+        $is_new_session = !empty($_POST['new_session']);
+
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+        if (!$this->can_user_view_video($user_id, $video_id)) $this->json_error('Forbidden', 403);
+
+        global $wpdb;
+        $views = self::table('video_views');
+        $now = current_time('mysql');
+
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT furthest_seconds, total_seconds, sessions FROM {$views} WHERE video_id = %d AND user_id = %d",
+            $video_id, $user_id
+        ), ARRAY_A);
+
+        $merged = Anchor_FM_Watch_Math::apply_progress(
+            $existing ?: ['furthest_seconds' => 0, 'total_seconds' => 0],
+            $point, $delta, $duration
+        );
+
+        if ($existing) {
+            $sessions = (int) $existing['sessions'] + ($is_new_session ? 1 : 0);
+            $wpdb->update($views, [
+                'furthest_seconds' => $merged['furthest_seconds'],
+                'total_seconds' => $merged['total_seconds'],
+                'percent' => $merged['percent'],
+                'sessions' => $sessions,
+                'last_viewed_at' => $now,
+            ], ['video_id' => $video_id, 'user_id' => $user_id], ['%d','%d','%d','%d','%s'], ['%d','%d']);
+        } else {
+            $wpdb->insert($views, [
+                'video_id' => $video_id,
+                'user_id' => $user_id,
+                'furthest_seconds' => $merged['furthest_seconds'],
+                'total_seconds' => $merged['total_seconds'],
+                'percent' => $merged['percent'],
+                'sessions' => 1,
+                'first_viewed_at' => $now,
+                'last_viewed_at' => $now,
+            ], ['%d','%d','%d','%d','%d','%d','%s','%s']);
+        }
+
+        $this->json_success(['saved' => true]);
+    }
+
+    public function ajax_vimeo_history() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+        if (!user_can($user_id, 'administrator')) $this->json_error('Forbidden', 403);
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+
+        global $wpdb;
+        $views = self::table('video_views');
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT user_id, furthest_seconds, total_seconds, percent, sessions, last_viewed_at
+             FROM {$views} WHERE video_id = %d ORDER BY last_viewed_at DESC LIMIT 500",
+            $video_id
+        ));
+
+        $out = [];
+        foreach ((array) $rows as $r) {
+            $u = get_user_by('id', (int) $r->user_id);
+            $out[] = [
+                'userId' => (int) $r->user_id,
+                'name' => $u ? $u->display_name : ('User #' . (int) $r->user_id),
+                'percent' => (int) $r->percent,
+                'totalSeconds' => (int) $r->total_seconds,
+                'sessions' => (int) $r->sessions,
+                'lastViewedAt' => $r->last_viewed_at,
+            ];
+        }
+        $this->json_success(['history' => $out]);
+    }
+
     public function ajax_move_file() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
