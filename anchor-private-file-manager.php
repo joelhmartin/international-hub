@@ -1955,6 +1955,39 @@ class Anchor_Private_File_Manager {
         $this->json_success(['history' => $out]);
     }
 
+    public function ajax_request_access() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $entity_type = isset($_POST['entity_type']) ? sanitize_key((string) $_POST['entity_type']) : '';
+        $entity_id = isset($_POST['entity_id']) ? (int) $_POST['entity_id'] : 0;
+        $label = isset($_POST['label']) ? sanitize_text_field((string) $_POST['label']) : '';
+        if (!in_array($entity_type, ['file','folder','video','link'], true) || $entity_id <= 0) {
+            $this->json_error('Invalid request');
+        }
+
+        $rate_key = 'afm_reqacc_' . $user_id . '_' . $entity_type . '_' . $entity_id;
+        if (get_transient($rate_key)) {
+            $this->json_success(['sent' => true, 'throttled' => true]);
+        }
+
+        $user = wp_get_current_user();
+        $to = $this->get_request_access_email();
+        $site = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+        $subject = sprintf('[%s] Access request from %s', $site, $user->display_name);
+        $body  = "A user has requested access to a document.\n\n";
+        $body .= "User: {$user->display_name} ({$user->user_email})\n";
+        $body .= "Item: {$label} ({$entity_type} #{$entity_id})\n";
+        $body .= "Time: " . current_time('mysql') . "\n";
+
+        wp_mail($to, $subject, $body);
+        set_transient($rate_key, 1, HOUR_IN_SECONDS);
+        $this->log_activity($user_id, 'request_access', $entity_type, $entity_id, ['to' => $to]);
+
+        $this->json_success(['sent' => true, 'throttled' => false]);
+    }
+
     public function ajax_move_file() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
