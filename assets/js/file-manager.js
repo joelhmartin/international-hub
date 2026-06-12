@@ -380,6 +380,11 @@ jQuery(function ($) {
         state.modalMode = '';
         state.modalPayload = null;
         $modalBody.html('');
+        $modal.find('.afm__modalPanel').removeClass('afm__modalPanel--viewer');
+        $modal.find('.afm__modalFooter [data-afm-action="modal-primary"]').show();
+        $modal.find('.afm__modalFooter [data-afm-action="close-modal"]').text('Cancel');
+        $modal.find('.afm__viewerFooter').empty();
+        if (typeof stopVideoTracking === 'function') stopVideoTracking();
     }
 
     function setModalPrimary(label, mode, payload) {
@@ -566,6 +571,59 @@ jQuery(function ($) {
                 </button>` : ''}
             `);
         });
+    }
+
+    function openViewer(kind, id) {
+        if (kind === 'file') return openFileViewer(id);
+        if (kind === 'video') { if (typeof openVideoViewer === 'function') return openVideoViewer(id); }
+    }
+
+    function metaRow(k, v) {
+        return `<div class="afm__metaRow"><div class="afm__metaKey">${esc(k)}</div><div class="afm__metaVal">${esc(v)}</div></div>`;
+    }
+
+    function openFileViewer(fileId) {
+        api('anchor_fm_preview', { file_id: fileId }).then(res => {
+            if (!res || !res.success) {
+                if (typeof showAccessDenied === 'function') showAccessDenied('file', fileId, '');
+                return;
+            }
+            const d = res.data, file = d.file, prev = d.preview;
+            let body = '<div class="afm__viewer">';
+            if (prev.type === 'image') {
+                body += `<div class="afm__viewerStage"><img class="afm__viewerImg" src="${esc(prev.inlineUrl)}" alt="${esc(file.name)}"></div>`;
+            } else if (prev.type === 'pdf') {
+                body += `<div class="afm__viewerStage"><iframe class="afm__viewerPdf" src="${esc(prev.inlineUrl)}"></iframe></div>`;
+            } else if (prev.type === 'text') {
+                body += `<pre class="afm__viewerText">${esc(prev.textExcerpt || '')}</pre>`;
+            } else {
+                body += `<div class="afm__viewerNone"><span class="dashicons dashicons-${iconForMime(file.mime)}"></span><div>No preview available</div></div>`;
+            }
+            body += '<div class="afm__viewerMeta">' +
+                metaRow('Type', file.mime) +
+                metaRow('Size', fmtSize(file.size)) +
+                metaRow('Added', String(file.createdAt || '').slice(0, 10)) +
+                '</div></div>';
+            const footer = prev.downloadUrl
+                ? `<a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}"><span class="dashicons dashicons-download"></span> Download</a>`
+                : '';
+            openViewerModal(esc(file.name), body, footer);
+        });
+    }
+
+    function openViewerModal(titleHtml, bodyHtml, footerHtml) {
+        $modal.find('.afm__modalTitle').html(titleHtml);
+        $modalBody.html(bodyHtml);
+        $modal.find('.afm__modalPanel').addClass('afm__modalPanel--viewer');
+        const $footer = $modal.find('.afm__modalFooter');
+        $footer.find('[data-afm-action="modal-primary"]').hide();
+        $footer.find('[data-afm-action="close-modal"]').text('Close');
+        let $vf = $footer.find('.afm__viewerFooter');
+        if (!$vf.length) { $vf = $('<div class="afm__viewerFooter"></div>').prependTo($footer); }
+        $vf.html(footerHtml || '');
+        $modal.prop('hidden', false);
+        $root.addClass('afm--modalOpen');
+        state.modalMode = 'viewer';
     }
 
     function openPermissions(entityType, entityId) {
@@ -931,7 +989,7 @@ jQuery(function ($) {
         if (action === 'open-file') {
             const fileId = Number(ctx.fileId || 0);
             if (!fileId) return;
-            loadFilePreview(fileId);
+            openViewer('file', fileId);
             return;
         }
 
@@ -1073,7 +1131,7 @@ jQuery(function ($) {
     $root.on('click', '[data-afm-file-card]', function (e) {
         const id = $(this).data('afm-file-card');
         if ($(e.target).closest('[data-afm-file-menu]').length) return;
-        loadFilePreview(id);
+        openViewer('file', id);
     });
 
     $root.on('click', '[data-afm-link-card]', function (e) {
