@@ -1580,6 +1580,36 @@ jQuery(function ($) {
         ).find(r => r.kind === kind && r.id === id) || null;
     }
 
+    $root.on('keydown', function (e) {
+        if ($(e.target).is('input, textarea, [contenteditable]')) return;
+        const $rows = $grid.find('.afm__row');
+        if (!$rows.length) return;
+        let idx = $rows.index($grid.find('.afm__row.is-active'));
+        if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min($rows.length - 1, idx + 1); focusRowAt($rows, idx); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(0, idx - 1); focusRowAt($rows, idx); }
+        else if (e.key === 'ArrowRight') { const $r = $rows.eq(Math.max(0, idx)); if ($r.data('afm-row-kind') === 'folder') $r.find('[data-afm-row-expand]').trigger('click'); }
+        else if (e.key === 'ArrowLeft') { const $r = $rows.eq(Math.max(0, idx)); const fid = Number($r.data('afm-row-id')); if (state.expandedRows[fid]) { delete state.expandedRows[fid]; renderList(state.currentList, state.currentCapability); } }
+        else if (e.key === 'Enter') { const $r = $rows.eq(Math.max(0, idx)); openRowDefault($r); }
+        else if (e.key === ' ') { e.preventDefault(); const $r = $rows.eq(Math.max(0, idx)); previewRow($r); }
+        else if (e.key === 'Escape') { if (typeof closeMenu === 'function') closeMenu(); if (!$modal.prop('hidden')) closeModal(); }
+    });
+
+    function focusRowAt($rows, idx) {
+        $rows.removeClass('is-active');
+        const $r = $rows.eq(idx).addClass('is-active');
+        if ($r[0]) $r[0].scrollIntoView({ block: 'nearest' });
+    }
+    function openRowDefault($r) {
+        const kind = $r.data('afm-row-kind'), id = Number($r.data('afm-row-id'));
+        if (kind === 'folder') loadFolder(id);
+        else if (kind === 'file' || kind === 'video') openViewer(kind, id);
+        else if (kind === 'link') { const l = findRow('link', id); if (l && l.url) window.open(l.url, '_blank', 'noopener'); }
+    }
+    function previewRow($r) {
+        const kind = $r.data('afm-row-kind'), id = Number($r.data('afm-row-id'));
+        if (kind === 'file' || kind === 'video') openViewer(kind, id);
+    }
+
     // Drag to move files into folders (admin/manage only)
     let dragFileId = null;
     let dragFolderId = null;
