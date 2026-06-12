@@ -472,6 +472,10 @@ jQuery(function ($) {
                 capability: res.data.capability,
                 isProductDocs: res.data.isProductDocs
             });
+            if (!state.deepLinkChecked) {
+                state.deepLinkChecked = true;
+                handleDeepLink();
+            }
         }).always(() => {
             $root.removeClass('afm--busy');
         });
@@ -1687,6 +1691,35 @@ jQuery(function ($) {
         const $r = $(this).closest('[data-afm-row]');
         startInlineRename($r.data('afm-row-kind'), Number($r.data('afm-row-id')));
     });
+
+    function shareUrlFor(kind, id) {
+        const base = window.location.origin + window.location.pathname;
+        return base + '#afm-' + kind + '-' + id;
+    }
+    function copyShareLink(kind, id) {
+        const url = shareUrlFor(kind, id);
+        const done = () => toast('Link copied');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(done, () => fallbackCopy(url, done));
+        } else { fallbackCopy(url, done); }
+    }
+    function fallbackCopy(text, cb) {
+        const $t = $('<textarea>').val(text).css({ position: 'fixed', opacity: 0 }).appendTo('body');
+        $t[0].select(); try { document.execCommand('copy'); } catch (e) {}
+        $t.remove(); if (cb) cb();
+    }
+    function toast(msg) {
+        const $t = $(`<div class="afm__toast">${esc(msg)}</div>`).appendTo($root);
+        setTimeout(() => $t.addClass('is-show'), 10);
+        setTimeout(() => { $t.removeClass('is-show'); setTimeout(() => $t.remove(), 300); }, 1800);
+    }
+    function handleDeepLink() {
+        const m = (window.location.hash || '').match(/^#afm-(file|video|folder|link)-(\d+)$/);
+        if (!m) return;
+        const kind = m[1], id = Number(m[2]);
+        if (kind === 'folder') { loadFolder(id); return; }
+        if (kind === 'file' || kind === 'video') openViewer(kind, id);
+    }
 
     // Drag to move files into folders (admin/manage only)
     let dragFileId = null;
