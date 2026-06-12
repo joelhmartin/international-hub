@@ -49,6 +49,15 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_update_link', [$this, 'ajax_update_link']);
         add_action('wp_ajax_anchor_fm_delete_link', [$this, 'ajax_delete_link']);
 
+        add_action('wp_ajax_anchor_fm_search', [$this, 'ajax_search']);
+        add_action('wp_ajax_anchor_fm_rename_file', [$this, 'ajax_rename_file']);
+        add_action('wp_ajax_anchor_fm_vimeo_add', [$this, 'ajax_vimeo_add']);
+        add_action('wp_ajax_anchor_fm_vimeo_update', [$this, 'ajax_vimeo_update']);
+        add_action('wp_ajax_anchor_fm_vimeo_delete', [$this, 'ajax_vimeo_delete']);
+        add_action('wp_ajax_anchor_fm_vimeo_progress', [$this, 'ajax_vimeo_progress']);
+        add_action('wp_ajax_anchor_fm_vimeo_history', [$this, 'ajax_vimeo_history']);
+        add_action('wp_ajax_anchor_fm_request_access', [$this, 'ajax_request_access']);
+
         add_action('wp_ajax_anchor_fm_get_permissions', [$this, 'ajax_get_permissions']);
         add_action('wp_ajax_anchor_fm_set_permissions', [$this, 'ajax_set_permissions']);
         add_action('wp_ajax_anchor_fm_user_search', [$this, 'ajax_user_search']);
@@ -858,6 +867,24 @@ class Anchor_Private_File_Manager {
         global $wpdb;
         $links = self::table('links');
         return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$links} WHERE id = %d", $link_id));
+    }
+
+    private function get_video_row($video_id) {
+        global $wpdb;
+        $videos = self::table('videos');
+        return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$videos} WHERE id = %d", $video_id));
+    }
+
+    private function can_user_view_video($user_id, $video_id) {
+        $video = $this->get_video_row($video_id);
+        if (!$video) return false;
+        return $this->can_user_view_folder($user_id, (int) $video->folder_id);
+    }
+
+    private function can_user_manage_video($user_id, $video_id) {
+        $video = $this->get_video_row($video_id);
+        if (!$video) return false;
+        return $this->can_user_manage_folder($user_id, (int) $video->folder_id);
     }
 
     private function get_effective_capability($user_id, $entity_type, $entity_id) {
