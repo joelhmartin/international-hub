@@ -459,6 +459,7 @@ jQuery(function ($) {
         api('anchor_fm_list', { folder_id: state.currentFolderId }).done(res => {
             if (!res || !res.success) return;
             renderBreadcrumbs(res.data.breadcrumbs);
+            state.lastBreadcrumbs = res.data.breadcrumbs;
             renderList({ folders: res.data.folders, links: res.data.links, files: res.data.files, videos: res.data.videos }, res.data.capability);
             $root.trigger('anchorfm:folderLoaded', {
                 folderId: state.currentFolderId,
@@ -1047,11 +1048,45 @@ jQuery(function ($) {
         }
     });
 
-    $search.on('input', function (e) {
-        if (ignoreIfNotFilesTab(e)) return;
-        state.search = $(this).val();
-        renderList(state.currentList, state.currentCapability);
+    let searchTimer = null;
+    $search.on('input', function () {
+        const term = String($(this).val() || '').trim();
+        state.search = term;
+        clearTimeout(searchTimer);
+        if (term.length < 2) {
+            renderList(state.currentList, state.currentCapability);
+            renderBreadcrumbs(state.lastBreadcrumbs || []);
+            return;
+        }
+        searchTimer = setTimeout(() => runGlobalSearch(term), 250);
     });
+
+    function runGlobalSearch(term) {
+        api('anchor_fm_search', { term: term }).then(res => {
+            if (!res || !res.success) return;
+            renderSearchResults(res.data.results || [], res.data.truncated, term);
+        });
+    }
+
+    function renderSearchResults(results, truncated, term) {
+        $breadcrumbs.html(`<span class="afm__crumb is-static">Search: “${esc(term)}”</span>`);
+        state.searchFolderById = {};
+        if (!results.length) {
+            $grid.html(`<div class="afm__empty">No matches for “${esc(term)}”.</div>`);
+            return;
+        }
+        let html = headerHtml() + '<div class="afm__list afm__list--search" tabindex="0">';
+        results.forEach(r => {
+            const item = { kind: r.kind, id: r.id, name: r.name, mime: r.mime, size: r.size, url: r.url, vimeoId: r.vimeoId, createdAt: '' };
+            // append the enclosing-folder path under the row
+            const base = rowHtml(item, 0);
+            html += base.replace('</div>\n            </div>', `</div><div class="afm__rowPath">${esc(r.path || 'Home')}</div>\n            </div>`);
+            state.searchFolderById[r.kind + ':' + r.id] = r.folderId;
+        });
+        if (truncated) html += `<div class="afm__empty">Showing the first results — refine your search to narrow further.</div>`;
+        html += '</div>';
+        $grid.html(html);
+    }
 
     $root.on('click', '[data-afm-action="new-folder"]', function (e) {
         if (ignoreIfNotFilesTab(e)) return;

@@ -633,7 +633,7 @@ class Anchor_Private_File_Manager {
                         <div class="afm__toolbarRight">
                             <label class="afm__search" data-apfm-search hidden>
                                 <span class="dashicons dashicons-search" aria-hidden="true"></span>
-                                <input type="search" placeholder="<?php esc_attr_e('Search in folder…', 'anchor-private-file-manager'); ?>" data-afm-search>
+                                <input type="search" placeholder="<?php esc_attr_e('Search all documents…', 'anchor-private-file-manager'); ?>" data-afm-search>
                             </label>
                             <button type="button" class="afm__btn afm__btn--secondary" data-apfm-action="refresh">
                                 <span class="dashicons dashicons-update" aria-hidden="true"></span>
