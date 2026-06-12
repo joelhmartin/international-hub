@@ -1369,6 +1369,7 @@ jQuery(function ($) {
     function renderSearchResults(results, truncated, term) {
         $breadcrumbs.html(`<span class="afm__crumb is-static">Search: “${esc(term)}”</span>`);
         state.searchFolderById = {};
+        state.searchRowsByKey = {};
         if (!results.length) {
             $grid.html(`<div class="afm__empty">No matches for “${esc(term)}”.</div>`);
             return;
@@ -1380,6 +1381,9 @@ jQuery(function ($) {
             const base = rowHtml(item, 0);
             html += base.replace('</div>\n            </div>', `</div><div class="afm__rowPath">${esc(r.path || 'Home')}</div>\n            </div>`);
             state.searchFolderById[r.kind + ':' + r.id] = r.folderId;
+            // Cache the row so findRow() can resolve items opened from search
+            // (e.g. play a video, open a link) without a browse listing.
+            state.searchRowsByKey[r.kind + ':' + r.id] = item;
         });
         if (truncated) html += `<div class="afm__empty">Showing the first results — refine your search to narrow further.</div>`;
         html += '</div>';
@@ -1502,6 +1506,10 @@ jQuery(function ($) {
 
     $root.on('click', '[data-afm-row-expand]', function (e) {
         e.stopPropagation();
+        // Expand-in-place operates on the browse listing only; in global-search
+        // view there is no current-folder context to inject children into, and
+        // re-rendering would discard the search results.
+        if (state.search && state.search.length >= 2) return;
         const fid = Number($(this).data('afm-row-expand'));
         if (state.expandedRows[fid]) {
             delete state.expandedRows[fid];
@@ -1610,9 +1618,12 @@ jQuery(function ($) {
     }
 
     function findRow(kind, id) {
-        return currentRows(state.currentList).concat(
+        const local = currentRows(state.currentList).concat(
             Object.values(state.expandedRows).flat()
-        ).find(r => r.kind === kind && r.id === id) || null;
+        ).find(r => r.kind === kind && r.id === Number(id));
+        if (local) return local;
+        // Fall back to a row surfaced via global search.
+        return (state.searchRowsByKey && state.searchRowsByKey[kind + ':' + id]) || null;
     }
 
     $root.on('keydown', function (e) {
