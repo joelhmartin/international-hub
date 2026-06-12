@@ -1610,6 +1610,26 @@ class Anchor_Private_File_Manager {
         $this->json_success(['fileId' => $file_id]);
     }
 
+    public function ajax_rename_file() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $file_id = isset($_POST['file_id']) ? (int) $_POST['file_id'] : 0;
+        $name = isset($_POST['name']) ? sanitize_file_name((string) $_POST['name']) : '';
+        if ($file_id <= 0 || $name === '') $this->json_error('Missing fields');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_file($user_id, $file_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $files = self::table('files');
+        // Only the display/original name changes; stored_name on disk is untouched.
+        $wpdb->update($files, ['original_name' => $name], ['id' => $file_id], ['%s'], ['%d']);
+        $this->log_activity($user_id, 'rename_file', 'file', $file_id, ['name' => $name]);
+        $this->json_success(['fileId' => $file_id, 'name' => $name]);
+    }
+
     public function ajax_create_link() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
