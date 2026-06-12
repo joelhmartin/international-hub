@@ -1721,6 +1721,32 @@ jQuery(function ($) {
         if (kind === 'file' || kind === 'video') openViewer(kind, id);
     }
 
+    function showAccessDenied(entityType, entityId, label) {
+        const body = `<div class="afm__denied">
+            <span class="dashicons dashicons-lock"></span>
+            <div class="afm__deniedTitle">You don't have access to this item</div>
+            <p class="afm__deniedText">If you think you should, you can request access.</p>
+            <button type="button" class="afm__btn afm__btn--primary" data-afm-request-access
+                    data-entity-type="${esc(entityType)}" data-entity-id="${esc(entityId)}" data-label="${esc(label || '')}">
+                Request access</button>
+            <div class="afm__notice" data-afm-request-notice hidden></div>
+        </div>`;
+        openViewerModal('Access required', body, '');
+    }
+
+    $root.on('click', '[data-afm-request-access]', function () {
+        const $b = $(this);
+        $b.prop('disabled', true);
+        api('anchor_fm_request_access', {
+            entity_type: $b.data('entity-type'),
+            entity_id: $b.data('entity-id'),
+            label: $b.data('label') || ''
+        }).then(res => {
+            const $n = $modalBody.find('[data-afm-request-notice]').prop('hidden', false);
+            $n.text(res && res.success ? 'Request sent. The site team has been notified.' : 'Could not send request.');
+        });
+    });
+
     // Drag to move files into folders (admin/manage only)
     let dragFileId = null;
     let dragFolderId = null;
