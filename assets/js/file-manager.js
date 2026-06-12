@@ -731,6 +731,16 @@ jQuery(function ($) {
             });
             return;
         }
+        if (state.modalMode === 'delete-video') {
+            const videoId = state.modalPayload && state.modalPayload.videoId ? Number(state.modalPayload.videoId) : 0;
+            if (!videoId) return;
+            api('anchor_fm_vimeo_delete', { video_id: videoId }).done(res => {
+                if (!res || !res.success) return;
+                closeModal();
+                loadFolder(state.currentFolderId);
+            });
+            return;
+        }
         if (state.modalMode === 'noop-close') {
             closeModal();
             return;
@@ -789,6 +799,52 @@ jQuery(function ($) {
             return;
         }
         closeMenu();
+
+        // Row (Finder list) context menu actions. Only the row menu sets ctx.kind.
+        if (ctx.kind) {
+            const k = ctx.kind;
+            const vid = Number(ctx.id);
+            if (action === 'open-folder') { loadFolder(vid); return; }
+            if (action === 'open-file') { if (typeof openViewer === 'function') openViewer('file', vid); return; }
+            if (action === 'open-video') { if (typeof openViewer === 'function') openViewer('video', vid); return; }
+            if (action === 'open-link') { const l = findRow('link', vid); if (l && l.url) window.open(l.url, '_blank', 'noopener'); return; }
+            if (action === 'show-in-folder') {
+                const target = (state.searchFolderById && state.searchFolderById[k + ':' + vid]);
+                const dest = (typeof target === 'number') ? target : state.currentFolderId;
+                $search.val(''); state.search = '';
+                loadFolder(dest);
+                flashRow(k, vid);
+                return;
+            }
+            if (action === 'copy-share-link') { if (typeof copyShareLink === 'function') copyShareLink(k, vid); return; }
+            if (action === 'rename') { if (typeof startInlineRename === 'function') startInlineRename(k, vid); return; }
+            if (action === 'permissions') { openPermissions(k, vid); return; }
+            if (action === 'edit-link') {
+                const link = findRow('link', vid);
+                openLinkModal({
+                    title: 'Edit link',
+                    primaryLabel: 'Save',
+                    mode: 'edit-link',
+                    payload: { linkId: vid },
+                    linkTitle: link ? (link.name || '') : '',
+                    linkUrl: link ? (link.url || '') : '',
+                });
+                return;
+            }
+            if (action === 'delete') {
+                if (k === 'folder') {
+                    openConfirmModal({ title: 'Delete folder', primaryLabel: 'Delete', mode: 'delete-folder', payload: { folderId: vid }, message: 'This will permanently delete the folder and all its contents.' });
+                } else if (k === 'file') {
+                    openConfirmModal({ title: 'Delete file', primaryLabel: 'Delete', mode: 'delete-file', payload: { fileId: vid }, message: 'This will permanently delete the file.' });
+                } else if (k === 'link') {
+                    openConfirmModal({ title: 'Delete link', primaryLabel: 'Delete', mode: 'delete-link', payload: { linkId: vid }, message: 'This will remove the link from this folder.' });
+                } else if (k === 'video') {
+                    openConfirmModal({ title: 'Delete video', primaryLabel: 'Delete', mode: 'delete-video', payload: { videoId: vid }, message: 'This will permanently delete the video.' });
+                }
+                return;
+            }
+            return;
+        }
 
         if (action === 'rename-folder') {
             const folderId = Number(ctx.folderId || 0);
@@ -899,6 +955,47 @@ jQuery(function ($) {
             return;
         }
     });
+
+    function buildRowMenu(kind, id) {
+        const items = [];
+        if (kind === 'folder') items.push({ action: 'open-folder', icon: 'category', label: 'Open' });
+        if (kind === 'file') items.push({ action: 'open-file', icon: 'visibility', label: 'Open' });
+        if (kind === 'video') items.push({ action: 'open-video', icon: 'video-alt3', label: 'Play' });
+        if (kind === 'link') items.push({ action: 'open-link', icon: 'admin-links', label: 'Open' });
+        items.push({ action: 'show-in-folder', icon: 'category', label: 'Show in enclosing folder' });
+        if (kind === 'file' || kind === 'video') items.push({ action: 'copy-share-link', icon: 'admin-links', label: 'Copy share link' });
+        if (AnchorFM.isAdmin) {
+            if (kind !== 'link') items.push({ action: 'rename', icon: 'edit', label: 'Rename' });
+            if (kind === 'link') items.push({ action: 'edit-link', icon: 'edit', label: 'Edit' });
+            if (kind === 'folder' || kind === 'file') items.push({ action: 'permissions', icon: 'shield', label: 'Permissions' });
+            items.push({ action: 'delete', icon: 'trash', label: 'Delete', danger: true });
+        }
+        return items;
+    }
+
+    function openRowMenu(anchorEl, kind, id) {
+        openMenu(anchorEl, buildRowMenu(kind, id), { kind: kind, id: Number(id) });
+    }
+
+    $root.on('click', '[data-afm-row-menu]', function (e) {
+        e.stopPropagation();
+        const parts = String($(this).data('afm-row-menu')).split(':');
+        openRowMenu(this, parts[0], parts[1]);
+    });
+    $root.on('contextmenu', '[data-afm-row]', function (e) {
+        e.preventDefault();
+        openRowMenu(this, $(this).data('afm-row-kind'), $(this).data('afm-row-id'));
+    });
+
+    function flashRow(kind, id) {
+        setTimeout(() => {
+            const $r = $grid.find(`[data-afm-row="${kind}:${id}"]`);
+            if (!$r.length) return;
+            $r[0].scrollIntoView({ block: 'center' });
+            $r.addClass('is-flash');
+            setTimeout(() => $r.removeClass('is-flash'), 1400);
+        }, 400);
+    }
 
     // Events
     const filesTabActive = () => (!portalMode || $root.hasClass('apfm--tab-files'));
