@@ -644,6 +644,10 @@ class Anchor_Private_File_Manager {
                                 <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
                                 <?php esc_html_e('New link', 'anchor-private-file-manager'); ?>
                             </button>
+                            <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="new-video" data-apfm-files-only>
+                                <span class="dashicons dashicons-video-alt3" aria-hidden="true"></span>
+                                <?php esc_html_e('New video', 'anchor-private-file-manager'); ?>
+                            </button>
                             <?php endif; ?>
                             <div class="afm__upload" data-apfm-upload hidden>
                                 <input type="file" multiple class="afm__fileInput" data-afm-file-input>

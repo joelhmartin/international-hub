@@ -476,6 +476,10 @@ jQuery(function ($) {
         });
     }
 
+    function reloadCurrentFolder() {
+        loadFolder(state.currentFolderId);
+    }
+
     function bootstrap() {
         $root.addClass('afm--busy');
         $tree.html('<div class="afm__skeleton afm__skeleton--share"></div>');
@@ -796,6 +800,19 @@ jQuery(function ($) {
                 if (!res || !res.success) return;
                 closeModal();
                 loadFolder(state.currentFolderId);
+            });
+            return;
+        }
+        if (state.modalMode === 'new-video') {
+            const title = $modalBody.find('[data-afm-video-title]').val();
+            const src = $modalBody.find('[data-afm-video-src]').val();
+            api('anchor_fm_vimeo_add', { folder_id: state.currentFolderId, title: title, vimeo: src }).then(res => {
+                if (!res || !res.success) {
+                    $modalBody.find('[data-afm-video-notice]').prop('hidden', false).text((res && res.data && res.data.message) || 'Could not add video');
+                    return;
+                }
+                closeModal();
+                reloadCurrentFolder();
             });
             return;
         }
@@ -1266,6 +1283,28 @@ jQuery(function ($) {
             mode: 'create-link',
         });
     });
+
+    $root.on('click', '[data-afm-action="new-video"]', function (e) {
+        if (ignoreIfNotFilesTab(e)) return;
+        if (state.currentFolderId <= 0) return;
+        closeMenu();
+        openVideoModal();
+    });
+
+    function openVideoModal() {
+        const body = `
+            <div class="afm__formRow"><label class="afm__label">Title</label>
+                <input type="text" class="afm__input" data-afm-video-title placeholder="Video title"></div>
+            <div class="afm__formRow"><label class="afm__label">Vimeo URL or ID</label>
+                <input type="text" class="afm__input" data-afm-video-src placeholder="https://vimeo.com/123456789"></div>
+            <div class="afm__notice" data-afm-video-notice hidden></div>`;
+        $modalTitle.text('New video');
+        $modalBody.html(body);
+        $modalPrimary.show();
+        setModalPrimary('Add', 'new-video', null);
+        openModal();
+        window.setTimeout(() => $modalBody.find('[data-afm-video-title]').trigger('focus'), 0);
+    }
 
     $root.on('click', '[data-afm-folder-menu]', function () {
         if (!AnchorFM.isAdmin) return;
