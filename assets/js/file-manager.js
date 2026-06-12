@@ -694,6 +694,32 @@ jQuery(function ($) {
         trackState = null;
     }
 
+    function fmtMMSS(total) {
+        total = Math.max(0, Number(total) || 0);
+        const m = Math.floor(total / 60), s = total % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function loadVideoHistory(videoId) {
+        api('anchor_fm_vimeo_history', { video_id: videoId }).then(res => {
+            const $body = $modalBody.find('.afm__vhistoryBody');
+            if (!res || !res.success) { $body.text('Unable to load history.'); return; }
+            const rows = res.data.history || [];
+            if (!rows.length) { $body.html('<div class="afm__empty">No views yet.</div>'); return; }
+            let html = '<div class="afm__vhistoryTable">';
+            rows.forEach(r => {
+                html += `<div class="afm__vhistoryRow">
+                    <span class="afm__vhName">${esc(r.name)}</span>
+                    <span class="afm__vhPct">${esc(r.percent)}%</span>
+                    <span class="afm__vhTime">${esc(fmtMMSS(r.totalSeconds))}</span>
+                    <span class="afm__vhDate">${esc(String(r.lastViewedAt || '').slice(0,10))}</span>
+                </div>`;
+            });
+            html += '</div>';
+            $body.html(html);
+        });
+    }
+
     function openPermissions(entityType, entityId) {
         state.selectedEntity = { entityType, entityId: Number(entityId) };
         $modalBody.html('<div class="afm__skeleton afm__skeleton--share"></div>');
