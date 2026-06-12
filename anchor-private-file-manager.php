@@ -18,6 +18,9 @@ class Anchor_Private_File_Manager {
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
     const META_PRODUCT_DOCS = '_anchor_pd_docs';
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
+    const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
+    const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
+    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycenter.com';
 
     private static $instance = null;
     private $portal_rendered = false;
@@ -126,6 +129,18 @@ class Anchor_Private_File_Manager {
         return '';
     }
 
+    private function get_vimeo_token() {
+        $env = getenv('VIMEO_ACCESS_TOKEN');
+        if (!empty($env)) return (string) $env;
+        if (defined('VIMEO_ACCESS_TOKEN') && VIMEO_ACCESS_TOKEN) return (string) VIMEO_ACCESS_TOKEN;
+        return (string) get_option(self::OPT_VIMEO_TOKEN, '');
+    }
+
+    private function get_request_access_email() {
+        $email = sanitize_email((string) get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL));
+        return $email ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+    }
+
     public function register_settings_page() {
         add_options_page(
             'Anchor Private File Manager',
@@ -143,6 +158,19 @@ class Anchor_Private_File_Manager {
                 return (int) (bool) $value;
             },
             'default' => 0,
+        ]);
+        register_setting('anchor_private_file_manager', self::OPT_VIMEO_TOKEN, [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) { return sanitize_text_field((string) $v); },
+            'default' => '',
+        ]);
+        register_setting('anchor_private_file_manager', self::OPT_REQUEST_ACCESS_EMAIL, [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                $v = sanitize_email((string) $v);
+                return $v ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+            },
+            'default' => self::DEFAULT_REQUEST_ACCESS_EMAIL,
         ]);
     }
 
@@ -163,6 +191,20 @@ class Anchor_Private_File_Manager {
                                 <input type="checkbox" name="<?php echo esc_attr(self::OPT_EMAIL_ON_UPLOAD); ?>" value="1" <?php checked((int) get_option(self::OPT_EMAIL_ON_UPLOAD, 0), 1); ?>>
                                 Send an email to administrators when a file is uploaded
                             </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Vimeo access token</th>
+                        <td>
+                            <input type="text" class="regular-text" name="<?php echo esc_attr(self::OPT_VIMEO_TOKEN); ?>" value="<?php echo esc_attr(get_option(self::OPT_VIMEO_TOKEN, '')); ?>" autocomplete="off">
+                            <p class="description">Optional. Used only for future aggregate Vimeo stats; per-user watch history works without it. A <code>VIMEO_ACCESS_TOKEN</code> entry in the plugin <code>.env</code> overrides this field.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Request-access recipient</th>
+                        <td>
+                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL)); ?>">
+                            <p class="description">Where "Request access" messages are sent.</p>
                         </td>
                     </tr>
                 </table>
