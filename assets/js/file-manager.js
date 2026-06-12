@@ -458,6 +458,16 @@ jQuery(function ($) {
     }
 
     function loadFolder(folderId) {
+        // Switching folders is a full browse-view transition: cancel any in-flight
+        // search and drop dataset-scoped caches so queued search callbacks or stale
+        // expanded rows can't repaint over the new folder.
+        clearTimeout(searchTimer);
+        state.searchSeq = (state.searchSeq || 0) + 1;
+        state.search = '';
+        $search.val('');
+        state.searchFolderById = {};
+        state.searchRowsByKey = {};
+        state.expandedRows = {};
         state.selectedRows.clear();
         if (typeof renderBulkBar === 'function') renderBulkBar();
         state.currentFolderId = Number(folderId);
@@ -1596,11 +1606,20 @@ jQuery(function ($) {
         let $bar = $root.find('[data-afm-bulkbar]');
         if (n < 2) { $bar.remove(); return; }
         if (!$bar.length) { $bar = $(`<div class="afm__bulkBar" data-afm-bulkbar></div>`).appendTo($root); }
+        // Only files and folders can be downloaded in bulk; hide the button for
+        // selections containing videos/links so we never silently skip items.
+        const canBulkDownload = Array.from(state.selectedRows).every(k => {
+            const kind = String(k).split(':')[0];
+            return kind === 'file' || kind === 'folder';
+        });
+        const downloadBtn = canBulkDownload
+            ? `<button type="button" class="afm__btn afm__btn--secondary" data-afm-bulk="download">Download</button>`
+            : '';
         const adminBtns = AnchorFM.isAdmin
             ? `<button type="button" class="afm__btn afm__btn--danger" data-afm-bulk="delete">Delete</button>`
             : '';
         $bar.html(`<span class="afm__bulkCount">${n} selected</span>
-            <button type="button" class="afm__btn afm__btn--secondary" data-afm-bulk="download">Download</button>
+            ${downloadBtn}
             ${adminBtns}
             <button type="button" class="afm__btn afm__btn--ghost" data-afm-bulk="clear">Clear</button>`);
     }
@@ -1812,7 +1831,7 @@ jQuery(function ($) {
             } else if (d.alreadyHasAccess) {
                 msg = 'You already have access to this item.';
             } else if (d.throttled) {
-                msg = 'You already requested access recently — the team has been notified.';
+                msg = 'You already requested access for this item recently — no new message was sent.';
             } else {
                 msg = 'Request sent. The site team has been notified.';
             }
