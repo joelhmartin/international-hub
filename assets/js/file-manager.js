@@ -500,6 +500,18 @@ jQuery(function ($) {
         });
     }
 
+    function ensureUploadProgress() {
+        let $p = $root.find('[data-afm-upload-progress]');
+        if (!$p.length) {
+            $p = $(`<div class="afm__uploadProgress" data-afm-upload-progress>
+                <div class="afm__uploadBar"><div class="afm__uploadBarFill"></div></div>
+                <span class="afm__uploadPct">0%</span></div>`).appendTo($root);
+        }
+        $p.find('.afm__uploadBarFill').css('width', '0%');
+        $p.find('.afm__uploadPct').text('0%');
+        return $p;
+    }
+
     function uploadFiles(files) {
         if (!files || !files.length) return;
         const canUpload = capRank(state.currentCapability) >= 2;
@@ -512,14 +524,33 @@ jQuery(function ($) {
         Array.from(files).forEach(f => data.append('files[]', f, f.name));
 
         $root.addClass('afm--busy');
+        ensureUploadProgress();
         $.ajax({
             url: AnchorFM.ajax,
             method: 'POST',
             data,
             processData: false,
             contentType: false,
+            xhr: function () {
+                const xhr = new window.XMLHttpRequest();
+                xhr.upload.addEventListener('progress', function (evt) {
+                    if (evt.lengthComputable) {
+                        const pct = Math.round((evt.loaded / evt.total) * 100);
+                        const $p = $root.find('[data-afm-upload-progress]');
+                        $p.find('.afm__uploadBarFill').css('width', pct + '%');
+                        $p.find('.afm__uploadPct').text(pct + '%');
+                    }
+                }, false);
+                return xhr;
+            },
         }).always(() => $root.removeClass('afm--busy'))
-            .done(() => loadFolder(state.currentFolderId));
+            .done(() => {
+                loadFolder(state.currentFolderId);
+                $root.find('[data-afm-upload-progress]').remove();
+            })
+            .fail(() => {
+                $root.find('[data-afm-upload-progress]').remove();
+            });
     }
 
     function loadFilePreview(fileId) {
