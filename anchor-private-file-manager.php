@@ -7,6 +7,8 @@
  */
 
 if (!defined('ABSPATH')) exit;
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 
 class Anchor_Private_File_Manager {
 
