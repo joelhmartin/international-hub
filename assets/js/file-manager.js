@@ -323,6 +323,16 @@ jQuery(function ($) {
     function renderList(list, capability) {
         state.currentList = list || { folders: [], files: [], links: [], videos: [] };
         state.currentCapability = capability || state.currentCapability;
+
+        // Capability gating for the toolbar controls (restored from the old card grid).
+        const canManage = capRank(state.currentCapability) >= 3;
+        const canUpload = canManage && state.currentFolderId > 0;
+        const canAddLink = canManage && state.currentFolderId > 0;
+        $root.toggleClass('afm--canCreateFolder', canManage);
+        $root.toggleClass('afm--canUpload', canUpload);
+        if ($uploadBtn.length) { $uploadBtn.prop('disabled', !canUpload); }
+        if ($linkBtn.length) { $linkBtn.prop('disabled', !canAddLink); }
+
         const rows = sortRows(currentRows(state.currentList));
         if (!rows.length) {
             $grid.html(headerHtml() + `<div class="afm__empty">${esc(AnchorFM.i18n.noFiles)}</div>`);
@@ -449,7 +459,7 @@ jQuery(function ($) {
         api('anchor_fm_list', { folder_id: state.currentFolderId }).done(res => {
             if (!res || !res.success) return;
             renderBreadcrumbs(res.data.breadcrumbs);
-            renderList({ folders: res.data.folders, links: res.data.links, files: res.data.files }, res.data.capability);
+            renderList({ folders: res.data.folders, links: res.data.links, files: res.data.files, videos: res.data.videos }, res.data.capability);
             $root.trigger('anchorfm:folderLoaded', {
                 folderId: state.currentFolderId,
                 capability: res.data.capability,
