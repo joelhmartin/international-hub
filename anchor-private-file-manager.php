@@ -1068,6 +1068,14 @@ class Anchor_Private_File_Manager {
         return array_reverse($crumbs);
     }
 
+    private function folder_path_string($folder_id) {
+        if ((int) $folder_id <= 0) return '';
+        $crumbs = $this->build_breadcrumbs((int) $folder_id);
+        $names = [];
+        foreach ($crumbs as $c) { $names[] = $c['name']; }
+        return implode(' › ', $names);
+    }
+
     private function build_folder_path_names($folder_id) {
         $crumbs = $this->build_breadcrumbs($folder_id);
         $names = [];
@@ -1328,6 +1336,92 @@ class Anchor_Private_File_Manager {
             'capability' => $cap,
             'isProductDocs' => $folder_id === $product_docs_id,
         ]);
+    }
+
+    public function ajax_search() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $term = isset($_POST['term']) ? trim((string) $_POST['term']) : '';
+        if ($term === '' || mb_strlen($term) < 2) {
+            $this->json_success(['results' => [], 'truncated' => false]);
+        }
+
+        global $wpdb;
+        $like = '%' . $wpdb->esc_like($term) . '%';
+        $product_docs_id = (int) get_option(self::OPT_PD_FOLDER_ID, 0);
+        $cap = 200;
+        $results = [];
+
+        $folders = self::table('folders');
+        $files = self::table('files');
+        $links = self::table('links');
+        $videos = self::table('videos');
+
+        // Folders (exclude private + product-docs container)
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, parent_id, name FROM {$folders} WHERE is_private = 0 AND name LIKE %s ORDER BY name ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if ((int) $r->id === $product_docs_id) continue;
+            if (!$this->can_user_view_folder($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'folder', 'id' => (int) $r->id, 'name' => $r->name,
+                'folderId' => (int) $r->parent_id,
+                'path' => $this->folder_path_string((int) $r->parent_id),
+            ];
+        }
+
+        // Files
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, folder_id, original_name, mime_type, size FROM {$files} WHERE original_name LIKE %s ORDER BY original_name ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if ((int) $r->folder_id === $product_docs_id) continue;
+            if (!$this->can_user_view_file($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'file', 'id' => (int) $r->id, 'name' => $r->original_name,
+                'mime' => $r->mime_type, 'size' => (int) $r->size,
+                'folderId' => (int) $r->folder_id,
+                'path' => $this->folder_path_string((int) $r->folder_id),
+            ];
+        }
+
+        // Links
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, folder_id, title, url FROM {$links} WHERE title LIKE %s ORDER BY title ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if (!$this->can_user_view_link($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'link', 'id' => (int) $r->id, 'name' => $r->title, 'url' => $r->url,
+                'folderId' => (int) $r->folder_id,
+                'path' => $this->folder_path_string((int) $r->folder_id),
+            ];
+        }
+
+        // Videos
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, folder_id, title, vimeo_id FROM {$videos} WHERE title LIKE %s ORDER BY title ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if (!$this->can_user_view_video($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'video', 'id' => (int) $r->id, 'name' => $r->title, 'vimeoId' => $r->vimeo_id,
+                'folderId' => (int) $r->folder_id,
+                'path' => $this->folder_path_string((int) $r->folder_id),
+            ];
+        }
+
+        $truncated = count($results) > $cap;
+        if ($truncated) $results = array_slice($results, 0, $cap);
+
+        $this->json_success(['results' => $results, 'truncated' => $truncated]);
     }
 
     public function ajax_create_folder() {
