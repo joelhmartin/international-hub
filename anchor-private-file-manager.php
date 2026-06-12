@@ -1684,6 +1684,78 @@ class Anchor_Private_File_Manager {
         $this->json_success(['linkId' => $link_id]);
     }
 
+    public function ajax_vimeo_add() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
+        $raw = isset($_POST['vimeo']) ? (string) $_POST['vimeo'] : '';
+        $vimeo_id = Anchor_FM_Vimeo::parse_id($raw);
+
+        if ($folder_id <= 0 || $title === '') $this->json_error('Missing fields');
+        if ($vimeo_id === '') $this->json_error('Could not read a Vimeo ID from that input');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_folder($user_id, $folder_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $videos = self::table('videos');
+        $now = current_time('mysql');
+        $wpdb->insert($videos, [
+            'folder_id' => $folder_id,
+            'vimeo_id' => $vimeo_id,
+            'title' => $title,
+            'created_by' => $user_id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], ['%d','%s','%s','%d','%s','%s']);
+        $video_id = (int) $wpdb->insert_id;
+        $this->log_activity($user_id, 'create_video', 'video', $video_id, ['folder_id' => $folder_id, 'vimeo_id' => $vimeo_id]);
+
+        $this->json_success(['videoId' => $video_id, 'vimeoId' => $vimeo_id]);
+    }
+
+    public function ajax_vimeo_update() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
+        if ($video_id <= 0 || $title === '') $this->json_error('Missing fields');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_video($user_id, $video_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $videos = self::table('videos');
+        $wpdb->update($videos, ['title' => $title, 'updated_at' => current_time('mysql')], ['id' => $video_id], ['%s','%s'], ['%d']);
+        $this->log_activity($user_id, 'rename_video', 'video', $video_id, ['title' => $title]);
+        $this->json_success(['videoId' => $video_id]);
+    }
+
+    public function ajax_vimeo_delete() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_video($user_id, $video_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $videos = self::table('videos');
+        $views = self::table('video_views');
+        $wpdb->delete($views, ['video_id' => $video_id], ['%d']);
+        $wpdb->delete($videos, ['id' => $video_id], ['%d']);
+        $this->log_activity($user_id, 'delete_video', 'video', $video_id, null);
+        $this->json_success(['videoId' => $video_id]);
+    }
+
     public function ajax_move_file() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
