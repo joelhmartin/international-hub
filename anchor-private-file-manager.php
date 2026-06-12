@@ -2,20 +2,25 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.16
+ * Version: 2.9.17
  * Author: Anchor Corps
  */
 
 if (!defined('ABSPATH')) exit;
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.9.09';
+    const VERSION = '2.9.17';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
     const META_PRODUCT_DOCS = '_anchor_pd_docs';
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
+    const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
+    const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
+    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
 
     private static $instance = null;
     private $portal_rendered = false;
@@ -43,6 +48,16 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_create_link', [$this, 'ajax_create_link']);
         add_action('wp_ajax_anchor_fm_update_link', [$this, 'ajax_update_link']);
         add_action('wp_ajax_anchor_fm_delete_link', [$this, 'ajax_delete_link']);
+
+        add_action('wp_ajax_anchor_fm_search', [$this, 'ajax_search']);
+        add_action('wp_ajax_anchor_fm_rename_file', [$this, 'ajax_rename_file']);
+        add_action('wp_ajax_anchor_fm_vimeo_get', [$this, 'ajax_vimeo_get']);
+        add_action('wp_ajax_anchor_fm_vimeo_add', [$this, 'ajax_vimeo_add']);
+        add_action('wp_ajax_anchor_fm_vimeo_update', [$this, 'ajax_vimeo_update']);
+        add_action('wp_ajax_anchor_fm_vimeo_delete', [$this, 'ajax_vimeo_delete']);
+        add_action('wp_ajax_anchor_fm_vimeo_progress', [$this, 'ajax_vimeo_progress']);
+        add_action('wp_ajax_anchor_fm_vimeo_history', [$this, 'ajax_vimeo_history']);
+        add_action('wp_ajax_anchor_fm_request_access', [$this, 'ajax_request_access']);
 
         add_action('wp_ajax_anchor_fm_get_permissions', [$this, 'ajax_get_permissions']);
         add_action('wp_ajax_anchor_fm_set_permissions', [$this, 'ajax_set_permissions']);
@@ -124,6 +139,18 @@ class Anchor_Private_File_Manager {
         return '';
     }
 
+    private function get_vimeo_token() {
+        $env = getenv('VIMEO_ACCESS_TOKEN');
+        if (!empty($env)) return (string) $env;
+        if (defined('VIMEO_ACCESS_TOKEN') && VIMEO_ACCESS_TOKEN) return (string) VIMEO_ACCESS_TOKEN;
+        return (string) get_option(self::OPT_VIMEO_TOKEN, '');
+    }
+
+    private function get_request_access_email() {
+        $email = sanitize_email((string) get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL));
+        return $email ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+    }
+
     public function register_settings_page() {
         add_options_page(
             'Anchor Private File Manager',
@@ -141,6 +168,19 @@ class Anchor_Private_File_Manager {
                 return (int) (bool) $value;
             },
             'default' => 0,
+        ]);
+        register_setting('anchor_private_file_manager', self::OPT_VIMEO_TOKEN, [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) { return sanitize_text_field((string) $v); },
+            'default' => '',
+        ]);
+        register_setting('anchor_private_file_manager', self::OPT_REQUEST_ACCESS_EMAIL, [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                $v = sanitize_email((string) $v);
+                return $v ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+            },
+            'default' => self::DEFAULT_REQUEST_ACCESS_EMAIL,
         ]);
     }
 
@@ -161,6 +201,20 @@ class Anchor_Private_File_Manager {
                                 <input type="checkbox" name="<?php echo esc_attr(self::OPT_EMAIL_ON_UPLOAD); ?>" value="1" <?php checked((int) get_option(self::OPT_EMAIL_ON_UPLOAD, 0), 1); ?>>
                                 Send an email to administrators when a file is uploaded
                             </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Vimeo access token</th>
+                        <td>
+                            <input type="text" class="regular-text" name="<?php echo esc_attr(self::OPT_VIMEO_TOKEN); ?>" value="<?php echo esc_attr(get_option(self::OPT_VIMEO_TOKEN, '')); ?>" autocomplete="off">
+                            <p class="description">Optional. Used only for future aggregate Vimeo stats; per-user watch history works without it. A <code>VIMEO_ACCESS_TOKEN</code> entry in the plugin <code>.env</code> overrides this field.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Request-access recipient</th>
+                        <td>
+                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL)); ?>">
+                            <p class="description">Where "Request access" messages are sent.</p>
                         </td>
                     </tr>
                 </table>
@@ -266,6 +320,7 @@ class Anchor_Private_File_Manager {
         self::ensure_upload_storage();
         self::ensure_product_docs_folder();
         self::ensure_links_table();
+        self::ensure_videos_table();
     }
 
     private static function ensure_upload_storage() {
@@ -334,10 +389,52 @@ class Anchor_Private_File_Manager {
         ");
     }
 
+    private static function ensure_videos_table() {
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+        $videos = self::table('videos');
+        $views  = self::table('video_views');
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        dbDelta("
+            CREATE TABLE {$videos} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                folder_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                vimeo_id VARCHAR(32) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                created_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                KEY folder_id (folder_id)
+            ) {$charset_collate};
+        ");
+
+        dbDelta("
+            CREATE TABLE {$views} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                video_id BIGINT(20) UNSIGNED NOT NULL,
+                user_id BIGINT(20) UNSIGNED NOT NULL,
+                furthest_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                total_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                percent TINYINT(3) UNSIGNED NOT NULL DEFAULT 0,
+                sessions INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                first_viewed_at DATETIME NOT NULL,
+                last_viewed_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                UNIQUE KEY video_user (video_id, user_id),
+                KEY video_id (video_id),
+                KEY user_id (user_id)
+            ) {$charset_collate};
+        ");
+    }
+
     private function maybe_upgrade_db() {
         $installed = (string) get_option(self::OPT_DB_VERSION, '0');
         if (version_compare($installed, self::VERSION, '<')) {
             self::ensure_links_table();
+            self::ensure_videos_table();
             update_option(self::OPT_DB_VERSION, self::VERSION);
         }
     }
@@ -396,10 +493,19 @@ class Anchor_Private_File_Manager {
             true
         );
 
+        wp_enqueue_script(
+            'anchor-fm-vimeo-player',
+            'https://player.vimeo.com/api/player.js',
+            [],
+            null,
+            true
+        );
+
         wp_localize_script('anchor-file-manager', 'AnchorFM', [
             'ajax' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce(self::NONCE_ACTION),
             'isAdmin' => current_user_can('administrator'),
+            'vimeoEnabled' => true,
             'productDocsFolderId' => $product_docs_id,
             'user' => [
                 'id' => get_current_user_id(),
@@ -528,7 +634,7 @@ class Anchor_Private_File_Manager {
                         <div class="afm__toolbarRight">
                             <label class="afm__search" data-apfm-search hidden>
                                 <span class="dashicons dashicons-search" aria-hidden="true"></span>
-                                <input type="search" placeholder="<?php esc_attr_e('Search in folder…', 'anchor-private-file-manager'); ?>" data-afm-search>
+                                <input type="search" placeholder="<?php esc_attr_e('Search all documents…', 'anchor-private-file-manager'); ?>" data-afm-search>
                             </label>
                             <button type="button" class="afm__btn afm__btn--secondary" data-apfm-action="refresh">
                                 <span class="dashicons dashicons-update" aria-hidden="true"></span>
@@ -538,6 +644,10 @@ class Anchor_Private_File_Manager {
                             <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="new-link" data-apfm-files-only>
                                 <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
                                 <?php esc_html_e('New link', 'anchor-private-file-manager'); ?>
+                            </button>
+                            <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="new-video" data-apfm-files-only>
+                                <span class="dashicons dashicons-video-alt3" aria-hidden="true"></span>
+                                <?php esc_html_e('New video', 'anchor-private-file-manager'); ?>
                             </button>
                             <?php endif; ?>
                             <div class="afm__upload" data-apfm-upload hidden>
@@ -773,6 +883,24 @@ class Anchor_Private_File_Manager {
         return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$links} WHERE id = %d", $link_id));
     }
 
+    private function get_video_row($video_id) {
+        global $wpdb;
+        $videos = self::table('videos');
+        return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$videos} WHERE id = %d", $video_id));
+    }
+
+    private function can_user_view_video($user_id, $video_id) {
+        $video = $this->get_video_row($video_id);
+        if (!$video) return false;
+        return $this->can_user_view_folder($user_id, (int) $video->folder_id);
+    }
+
+    private function can_user_manage_video($user_id, $video_id) {
+        $video = $this->get_video_row($video_id);
+        if (!$video) return false;
+        return $this->can_user_manage_folder($user_id, (int) $video->folder_id);
+    }
+
     private function get_effective_capability($user_id, $entity_type, $entity_id) {
         if (user_can($user_id, 'administrator')) {
             return 'manage';
@@ -952,6 +1080,14 @@ class Anchor_Private_File_Manager {
             $current = !empty($current->parent_id) ? $this->get_folder_row((int) $current->parent_id) : null;
         }
         return array_reverse($crumbs);
+    }
+
+    private function folder_path_string($folder_id) {
+        if ((int) $folder_id <= 0) return '';
+        $crumbs = $this->build_breadcrumbs((int) $folder_id);
+        $names = [];
+        foreach ($crumbs as $c) { $names[] = $c['name']; }
+        return implode(' › ', $names);
     }
 
     private function build_folder_path_names($folder_id) {
@@ -1184,6 +1320,25 @@ class Anchor_Private_File_Manager {
             }
         }
 
+        $video_list = [];
+        if ($folder_id > 0) {
+            $videos_table = self::table('videos');
+            $video_rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, folder_id, vimeo_id, title, created_by, created_at FROM {$videos_table} WHERE folder_id = %d ORDER BY created_at DESC",
+                $folder_id
+            ));
+            foreach ((array) $video_rows as $v) {
+                if (!$this->can_user_view_video($user_id, (int) $v->id)) continue;
+                $video_list[] = [
+                    'id' => (int) $v->id,
+                    'title' => $v->title,
+                    'vimeoId' => $v->vimeo_id,
+                    'createdBy' => !empty($v->created_by) ? (int) $v->created_by : 0,
+                    'createdAt' => $v->created_at,
+                ];
+            }
+        }
+
         $cap = $folder_id === 0 ? (user_can($user_id, 'administrator') ? 'manage' : 'view') : $this->get_effective_capability($user_id, 'folder', $folder_id);
         $this->json_success([
             'folderId' => $folder_id,
@@ -1191,9 +1346,96 @@ class Anchor_Private_File_Manager {
             'folders' => $subfolders,
             'links' => $link_list,
             'files' => $file_list,
+            'videos' => $video_list,
             'capability' => $cap,
             'isProductDocs' => $folder_id === $product_docs_id,
         ]);
+    }
+
+    public function ajax_search() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $term = isset($_POST['term']) ? sanitize_text_field((string) $_POST['term']) : '';
+        if ($term === '' || mb_strlen($term) < 2) {
+            $this->json_success(['results' => [], 'truncated' => false]);
+        }
+
+        global $wpdb;
+        $like = '%' . $wpdb->esc_like($term) . '%';
+        $product_docs_id = (int) get_option(self::OPT_PD_FOLDER_ID, 0);
+        $cap = 200;
+        $results = [];
+
+        $folders = self::table('folders');
+        $files = self::table('files');
+        $links = self::table('links');
+        $videos = self::table('videos');
+
+        // Folders (exclude private + product-docs container)
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, parent_id, name FROM {$folders} WHERE is_private = 0 AND name LIKE %s ORDER BY name ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if ((int) $r->id === $product_docs_id) continue;
+            if (!$this->can_user_view_folder($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'folder', 'id' => (int) $r->id, 'name' => $r->name,
+                'folderId' => (int) $r->parent_id,
+                'path' => $this->folder_path_string((int) $r->parent_id),
+            ];
+        }
+
+        // Files
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, folder_id, original_name, mime_type, size FROM {$files} WHERE original_name LIKE %s ORDER BY original_name ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if ((int) $r->folder_id === $product_docs_id) continue;
+            if (!$this->can_user_view_file($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'file', 'id' => (int) $r->id, 'name' => $r->original_name,
+                'mime' => $r->mime_type, 'size' => (int) $r->size,
+                'folderId' => (int) $r->folder_id,
+                'path' => $this->folder_path_string((int) $r->folder_id),
+            ];
+        }
+
+        // Links
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, folder_id, title, url FROM {$links} WHERE title LIKE %s ORDER BY title ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if (!$this->can_user_view_link($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'link', 'id' => (int) $r->id, 'name' => $r->title, 'url' => $r->url,
+                'folderId' => (int) $r->folder_id,
+                'path' => $this->folder_path_string((int) $r->folder_id),
+            ];
+        }
+
+        // Videos
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, folder_id, title, vimeo_id FROM {$videos} WHERE title LIKE %s ORDER BY title ASC LIMIT %d",
+            $like, $cap
+        ));
+        foreach ((array) $rows as $r) {
+            if (!$this->can_user_view_video($user_id, (int) $r->id)) continue;
+            $results[] = [
+                'kind' => 'video', 'id' => (int) $r->id, 'name' => $r->title, 'vimeoId' => $r->vimeo_id,
+                'folderId' => (int) $r->folder_id,
+                'path' => $this->folder_path_string((int) $r->folder_id),
+            ];
+        }
+
+        $truncated = count($results) > $cap;
+        if ($truncated) $results = array_slice($results, 0, $cap);
+
+        $this->json_success(['results' => $results, 'truncated' => $truncated]);
     }
 
     public function ajax_create_folder() {
@@ -1270,6 +1512,9 @@ class Anchor_Private_File_Manager {
         $folders_table = self::table('folders');
         $files_table = self::table('files');
         $perms_table = self::table('permissions');
+        $links_table = self::table('links');
+        $videos_table = self::table('videos');
+        $video_views_table = self::table('video_views');
 
         $folder = $this->get_folder_row($folder_id);
         if (!$folder) {
@@ -1339,6 +1584,29 @@ class Anchor_Private_File_Manager {
                 ["DELETE FROM {$perms_table} WHERE entity_type = 'folder' AND entity_id IN ({$dph})"],
                 $folder_ids
             )));
+
+            // Remove links in these folders.
+            $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                ["DELETE FROM {$links_table} WHERE folder_id IN ({$dph})"],
+                $folder_ids
+            )));
+
+            // Remove videos in these folders and their watch-history rows.
+            $video_ids = $wpdb->get_col(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                ["SELECT id FROM {$videos_table} WHERE folder_id IN ({$dph})"],
+                $folder_ids
+            )));
+            if ($video_ids) {
+                $vph = implode(',', array_fill(0, count($video_ids), '%d'));
+                $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                    ["DELETE FROM {$video_views_table} WHERE video_id IN ({$vph})"],
+                    array_map('intval', $video_ids)
+                )));
+                $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                    ["DELETE FROM {$videos_table} WHERE id IN ({$vph})"],
+                    array_map('intval', $video_ids)
+                )));
+            }
 
             $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
                 ["DELETE FROM {$folders_table} WHERE id IN ({$dph})"],
@@ -1476,6 +1744,26 @@ class Anchor_Private_File_Manager {
         $this->json_success(['fileId' => $file_id]);
     }
 
+    public function ajax_rename_file() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $file_id = isset($_POST['file_id']) ? (int) $_POST['file_id'] : 0;
+        $name = isset($_POST['name']) ? sanitize_file_name((string) $_POST['name']) : '';
+        if ($file_id <= 0 || $name === '') $this->json_error('Missing fields');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_file($user_id, $file_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $files = self::table('files');
+        // Only the display/original name changes; stored_name on disk is untouched.
+        $wpdb->update($files, ['original_name' => $name], ['id' => $file_id], ['%s'], ['%d']);
+        $this->log_activity($user_id, 'rename_file', 'file', $file_id, ['name' => $name]);
+        $this->json_success(['fileId' => $file_id, 'name' => $name]);
+    }
+
     public function ajax_create_link() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -1548,6 +1836,249 @@ class Anchor_Private_File_Manager {
 
         $this->log_activity($user_id, 'delete_link', 'link', $link_id, null);
         $this->json_success(['linkId' => $link_id]);
+    }
+
+    public function ajax_vimeo_get() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+
+        $video = $this->get_video_row($video_id);
+        if (!$video) $this->json_error('Not found', 404);
+        if (!$this->can_user_view_video($user_id, $video_id)) $this->json_error('Forbidden', 403);
+
+        $this->json_success(['video' => [
+            'id' => (int) $video->id,
+            'title' => $video->title,
+            'vimeoId' => $video->vimeo_id,
+            'folderId' => (int) $video->folder_id,
+        ]]);
+    }
+
+    public function ajax_vimeo_add() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
+        $raw = isset($_POST['vimeo']) ? (string) $_POST['vimeo'] : '';
+        $vimeo_id = Anchor_FM_Vimeo::parse_id($raw);
+
+        if ($folder_id <= 0 || $title === '') $this->json_error('Missing fields');
+        if ($vimeo_id === '') $this->json_error('Could not read a Vimeo ID from that input');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_folder($user_id, $folder_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $videos = self::table('videos');
+        $now = current_time('mysql');
+        $wpdb->insert($videos, [
+            'folder_id' => $folder_id,
+            'vimeo_id' => $vimeo_id,
+            'title' => $title,
+            'created_by' => $user_id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], ['%d','%s','%s','%d','%s','%s']);
+        $video_id = (int) $wpdb->insert_id;
+        $this->log_activity($user_id, 'create_video', 'video', $video_id, ['folder_id' => $folder_id, 'vimeo_id' => $vimeo_id]);
+
+        $this->json_success(['videoId' => $video_id, 'vimeoId' => $vimeo_id]);
+    }
+
+    public function ajax_vimeo_update() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
+        if ($video_id <= 0 || $title === '') $this->json_error('Missing fields');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_video($user_id, $video_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $videos = self::table('videos');
+        $wpdb->update($videos, ['title' => $title, 'updated_at' => current_time('mysql')], ['id' => $video_id], ['%s','%s'], ['%d']);
+        $this->log_activity($user_id, 'rename_video', 'video', $video_id, ['title' => $title]);
+        $this->json_success(['videoId' => $video_id]);
+    }
+
+    public function ajax_vimeo_delete() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_video($user_id, $video_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $videos = self::table('videos');
+        $views = self::table('video_views');
+        $wpdb->delete($views, ['video_id' => $video_id], ['%d']);
+        $wpdb->delete($videos, ['id' => $video_id], ['%d']);
+        $this->log_activity($user_id, 'delete_video', 'video', $video_id, null);
+        $this->json_success(['videoId' => $video_id]);
+    }
+
+    public function ajax_vimeo_progress() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        $point = isset($_POST['point']) ? (int) $_POST['point'] : 0;
+        $delta = isset($_POST['delta']) ? (int) $_POST['delta'] : 0;
+        $duration = isset($_POST['duration']) ? (int) $_POST['duration'] : 0;
+        $is_new_session = !empty($_POST['new_session']);
+
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+        if (!$this->can_user_view_video($user_id, $video_id)) $this->json_error('Forbidden', 403);
+
+        global $wpdb;
+        $views = self::table('video_views');
+        $now = current_time('mysql');
+
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT furthest_seconds, total_seconds, sessions FROM {$views} WHERE video_id = %d AND user_id = %d",
+            $video_id, $user_id
+        ), ARRAY_A);
+
+        $merged = Anchor_FM_Watch_Math::apply_progress(
+            $existing ?: ['furthest_seconds' => 0, 'total_seconds' => 0],
+            $point, $delta, $duration
+        );
+
+        if ($existing) {
+            $sessions = (int) $existing['sessions'] + ($is_new_session ? 1 : 0);
+            $wpdb->update($views, [
+                'furthest_seconds' => $merged['furthest_seconds'],
+                'total_seconds' => $merged['total_seconds'],
+                'percent' => $merged['percent'],
+                'sessions' => $sessions,
+                'last_viewed_at' => $now,
+            ], ['video_id' => $video_id, 'user_id' => $user_id], ['%d','%d','%d','%d','%s'], ['%d','%d']);
+        } else {
+            $wpdb->insert($views, [
+                'video_id' => $video_id,
+                'user_id' => $user_id,
+                'furthest_seconds' => $merged['furthest_seconds'],
+                'total_seconds' => $merged['total_seconds'],
+                'percent' => $merged['percent'],
+                'sessions' => 1,
+                'first_viewed_at' => $now,
+                'last_viewed_at' => $now,
+            ], ['%d','%d','%d','%d','%d','%d','%s','%s']);
+        }
+
+        $this->json_success(['saved' => true]);
+    }
+
+    public function ajax_vimeo_history() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+        if (!user_can($user_id, 'administrator')) $this->json_error('Forbidden', 403);
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+
+        global $wpdb;
+        $views = self::table('video_views');
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT user_id, furthest_seconds, total_seconds, percent, sessions, last_viewed_at
+             FROM {$views} WHERE video_id = %d ORDER BY last_viewed_at DESC LIMIT 500",
+            $video_id
+        ));
+
+        $out = [];
+        foreach ((array) $rows as $r) {
+            $u = get_user_by('id', (int) $r->user_id);
+            $out[] = [
+                'userId' => (int) $r->user_id,
+                'name' => $u ? $u->display_name : ('User #' . (int) $r->user_id),
+                'percent' => (int) $r->percent,
+                'totalSeconds' => (int) $r->total_seconds,
+                'sessions' => (int) $r->sessions,
+                'lastViewedAt' => $r->last_viewed_at,
+            ];
+        }
+        $this->json_success(['history' => $out]);
+    }
+
+    public function ajax_request_access() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $entity_type = isset($_POST['entity_type']) ? sanitize_key((string) $_POST['entity_type']) : '';
+        $entity_id = isset($_POST['entity_id']) ? (int) $_POST['entity_id'] : 0;
+        $label = isset($_POST['label']) ? sanitize_text_field((string) $_POST['label']) : '';
+        if (!in_array($entity_type, ['file','folder','video','link'], true) || $entity_id <= 0) {
+            $this->json_error('Invalid request');
+        }
+
+        // Resolve the entity and confirm it exists, then confirm the requester
+        // genuinely lacks view access. This is the "access denied for a real
+        // item" flow — refusing arbitrary ids prevents using it for mail spam.
+        $exists = false;
+        $can_view = false;
+        switch ($entity_type) {
+            case 'file':
+                $exists = (bool) $this->get_file_row($entity_id);
+                $can_view = $exists && $this->can_user_view_file($user_id, $entity_id);
+                break;
+            case 'folder':
+                $exists = (bool) $this->get_folder_row($entity_id);
+                $can_view = $exists && $this->can_user_view_folder($user_id, $entity_id);
+                break;
+            case 'video':
+                $exists = (bool) $this->get_video_row($entity_id);
+                $can_view = $exists && $this->can_user_view_video($user_id, $entity_id);
+                break;
+            case 'link':
+                $exists = (bool) $this->get_link_row($entity_id);
+                $can_view = $exists && $this->can_user_view_link($user_id, $entity_id);
+                break;
+        }
+        if (!$exists) $this->json_error('Not found', 404);
+        if ($can_view) {
+            // Already has access — nothing to request, nothing to email.
+            $this->json_success(['sent' => false, 'alreadyHasAccess' => true]);
+        }
+
+        $rate_key = 'afm_reqacc_' . $user_id . '_' . $entity_type . '_' . $entity_id;
+        if (get_transient($rate_key)) {
+            $this->json_success(['sent' => true, 'throttled' => true]);
+        }
+
+        $user = wp_get_current_user();
+        $to = $this->get_request_access_email();
+        $site = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+        $subject = sprintf('[%s] Access request from %s', $site, $user->display_name);
+        $body  = "A user has requested access to a document.\n\n";
+        $body .= "User: {$user->display_name} ({$user->user_email})\n";
+        $body .= "Item: {$label} ({$entity_type} #{$entity_id})\n";
+        $body .= "Time: " . current_time('mysql') . "\n";
+
+        $sent = wp_mail($to, $subject, $body);
+        if (!$sent) {
+            // Don't throttle or report success on delivery failure, so the user can retry.
+            $this->json_error('Could not send the request right now. Please try again later.', 500);
+        }
+        set_transient($rate_key, 1, HOUR_IN_SECONDS);
+        $this->log_activity($user_id, 'request_access', $entity_type, $entity_id, ['to' => $to]);
+
+        $this->json_success(['sent' => true, 'throttled' => false]);
     }
 
     public function ajax_move_file() {

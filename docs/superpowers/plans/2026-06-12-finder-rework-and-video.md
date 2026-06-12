@@ -371,7 +371,7 @@ git commit -m "feat: add anchor_fm_videos and video_views tables"
 ```php
     const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
     const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
-    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycenter.com';
+    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
 ```
 
 - [ ] **Step 2: Register the settings** — inside `register_settings()` (after line 144, before the closing brace) add:
@@ -942,7 +942,7 @@ git commit -m "feat: add watch-progress upsert and admin history endpoints"
 - [ ] **Step 2: Verify syntax + manual smoke**
 
 Run: `php -l anchor-private-file-manager.php` → ok.
-Manual: POST `anchor_fm_request_access` with `entity_type=file`, a real `entity_id`, `label=Test`. Expect `sent:true`. Confirm the recipient (from settings, default `tiffany@tmjtherapycenter.com`) receives the email (or check the mail log). Call again immediately → `throttled:true`, no second email.
+Manual: POST `anchor_fm_request_access` with `entity_type=file`, a real `entity_id`, `label=Test`. Expect `sent:true`. Confirm the recipient (from settings, default `tiffany@tmjtherapycentre.com`) receives the email (or check the mail log). Call again immediately → `throttled:true`, no second email.
 
 - [ ] **Step 3: Commit**
 

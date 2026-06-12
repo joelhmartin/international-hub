@@ -70,7 +70,7 @@ jQuery(function ($) {
     function updateToolbar() {
         const isFiles = state.tab === 'files';
         const hasFolder = isFiles && state.currentFolderId > 0;
-        $searchWrap.prop('hidden', !hasFolder);
+        $searchWrap.prop('hidden', !isFiles);
         $uploadWrap.prop('hidden', !isFiles);
         $refreshBtn.prop('hidden', isFiles && hasFolder ? true : false);
         $tree.prop('hidden', !isFiles);
