@@ -12,7 +12,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.9.09';
+    const VERSION = '2.9.17';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
@@ -268,6 +268,7 @@ class Anchor_Private_File_Manager {
         self::ensure_upload_storage();
         self::ensure_product_docs_folder();
         self::ensure_links_table();
+        self::ensure_videos_table();
     }
 
     private static function ensure_upload_storage() {
@@ -336,10 +337,52 @@ class Anchor_Private_File_Manager {
         ");
     }
 
+    private static function ensure_videos_table() {
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+        $videos = self::table('videos');
+        $views  = self::table('video_views');
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        dbDelta("
+            CREATE TABLE {$videos} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                folder_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                vimeo_id VARCHAR(32) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                created_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                KEY folder_id (folder_id)
+            ) {$charset_collate};
+        ");
+
+        dbDelta("
+            CREATE TABLE {$views} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                video_id BIGINT(20) UNSIGNED NOT NULL,
+                user_id BIGINT(20) UNSIGNED NOT NULL,
+                furthest_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                total_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                percent TINYINT(3) UNSIGNED NOT NULL DEFAULT 0,
+                sessions INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                first_viewed_at DATETIME NOT NULL,
+                last_viewed_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                UNIQUE KEY video_user (video_id, user_id),
+                KEY video_id (video_id),
+                KEY user_id (user_id)
+            ) {$charset_collate};
+        ");
+    }
+
     private function maybe_upgrade_db() {
         $installed = (string) get_option(self::OPT_DB_VERSION, '0');
         if (version_compare($installed, self::VERSION, '<')) {
             self::ensure_links_table();
+            self::ensure_videos_table();
             update_option(self::OPT_DB_VERSION, self::VERSION);
         }
     }
