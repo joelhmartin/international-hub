@@ -289,8 +289,10 @@ jQuery(function ($) {
             : `<span class="afm__rowDisclosure afm__rowDisclosure--empty"></span>`;
         const sizeText = item.kind === 'file' ? esc(fmtSize(item.size)) : '—';
         const modified = item.createdAt ? esc(String(item.createdAt).slice(0, 10)) : '—';
+        // Files and folders can be moved (drag onto a folder row or the sidebar tree).
+        const draggable = (AnchorFM.isAdmin && (item.kind === 'file' || item.kind === 'folder')) ? ' draggable="true"' : '';
         return `
-            <div class="afm__row afm__row--${item.kind}${selected}"
+            <div class="afm__row afm__row--${item.kind}${selected}"${draggable}
                  data-afm-row="${item.kind}:${item.id}"
                  data-afm-row-kind="${item.kind}" data-afm-row-id="${item.id}"
                  style="--afm-row-pad:${pad}px" tabindex="-1">
@@ -320,6 +322,14 @@ jQuery(function ($) {
             </div>`;
     }
 
+    function renderRowTree(item, depth) {
+        let html = rowHtml(item, depth);
+        if (item.kind === 'folder' && state.expandedRows[item.id]) {
+            state.expandedRows[item.id].forEach(child => { html += renderRowTree(child, depth + 1); });
+        }
+        return html;
+    }
+
     function renderList(list, capability) {
         state.currentList = list || { folders: [], files: [], links: [], videos: [] };
         state.currentCapability = capability || state.currentCapability;
@@ -339,12 +349,7 @@ jQuery(function ($) {
             return;
         }
         let html = headerHtml() + '<div class="afm__list" tabindex="0">';
-        rows.forEach(item => {
-            html += rowHtml(item, 0);
-            if (item.kind === 'folder' && state.expandedRows[item.id]) {
-                state.expandedRows[item.id].forEach(child => { html += rowHtml(child, 1); });
-            }
-        });
+        rows.forEach(item => { html += renderRowTree(item, 0); });
         html += '</div>';
         $grid.html(html);
         Object.keys(state.expandedRows).forEach(fid => {
@@ -454,6 +459,7 @@ jQuery(function ($) {
 
     function loadFolder(folderId) {
         state.selectedRows.clear();
+        if (typeof renderBulkBar === 'function') renderBulkBar();
         state.currentFolderId = Number(folderId);
         openBranch(state.currentFolderId);
         renderTree(state.tree);
@@ -670,17 +676,28 @@ jQuery(function ($) {
 
     function openVideoViewer(videoId) {
         const v = findRow('video', videoId);
-        if (!v || !v.vimeoId) {
-            if (typeof showAccessDenied === 'function') showAccessDenied('video', videoId, '');
-            return;
-        }
+        if (v && v.vimeoId) { renderVideoViewer(videoId, v.name, v.vimeoId); return; }
+        // Not in the current/expanded/search cache (e.g. opened from a deep link) —
+        // resolve it by id. The endpoint enforces view permission, so a forbidden
+        // or missing video falls through to the access-denied modal.
+        api('anchor_fm_vimeo_get', { video_id: videoId }).then(res => {
+            if (res && res.success && res.data.video && res.data.video.vimeoId) {
+                const vid = res.data.video;
+                renderVideoViewer(videoId, vid.title, vid.vimeoId);
+            } else if (typeof showAccessDenied === 'function') {
+                showAccessDenied('video', videoId, '');
+            }
+        });
+    }
+
+    function renderVideoViewer(videoId, name, vimeoId) {
         const playerId = 'afmVPlayer_' + videoId;
         let body = `<div class="afm__vplayer"><div id="${playerId}" class="afm__vplayerFrame" data-afm-video-frame></div></div>`;
         if (AnchorFM.isAdmin) {
             body += `<div class="afm__vhistory" data-afm-video-history><div class="afm__sectionTitle">Watch history</div><div class="afm__vhistoryBody">Loading…</div></div>`;
         }
-        openViewerModal(esc(v.name), body, '');
-        mountVimeoPlayer(playerId, v.vimeoId, videoId);
+        openViewerModal(esc(name), body, '');
+        mountVimeoPlayer(playerId, vimeoId, videoId);
         if (AnchorFM.isAdmin) loadVideoHistory(videoId);
     }
 
@@ -1352,6 +1369,8 @@ jQuery(function ($) {
         state.search = term;
         clearTimeout(searchTimer);
         if (term.length < 2) {
+            // Invalidate any in-flight search so a late response can't repaint over the browse view.
+            state.searchSeq = (state.searchSeq || 0) + 1;
             renderList(state.currentList, state.currentCapability);
             renderBreadcrumbs(state.lastBreadcrumbs || []);
             return;
@@ -1360,13 +1379,19 @@ jQuery(function ($) {
     });
 
     function runGlobalSearch(term) {
+        const seq = (state.searchSeq = (state.searchSeq || 0) + 1);
         api('anchor_fm_search', { term: term }).then(res => {
+            if (seq !== state.searchSeq) return; // a newer query (or a clear) superseded this response
             if (!res || !res.success) return;
             renderSearchResults(res.data.results || [], res.data.truncated, term);
         });
     }
 
     function renderSearchResults(results, truncated, term) {
+        // Switching to a search view changes the visible dataset; drop any
+        // selection so the bulk bar can't act on rows that are no longer shown.
+        state.selectedRows.clear();
+        renderBulkBar();
         $breadcrumbs.html(`<span class="afm__crumb is-static">Search: “${esc(term)}”</span>`);
         state.searchFolderById = {};
         state.searchRowsByKey = {};
@@ -1585,10 +1610,21 @@ jQuery(function ($) {
         const keys = Array.from(state.selectedRows);
         if (op === 'clear') { state.selectedRows.clear(); refreshSelectionUI(); return; }
         if (op === 'download') {
-            keys.forEach(k => {
+            // Each download must be its own request; assigning window.location in
+            // a loop only keeps the last. Trigger a separate anchor click per item
+            // (the stream endpoints send Content-Disposition: attachment), and
+            // stagger them so the browser treats them as distinct downloads.
+            keys.forEach((k, i) => {
                 const parts = k.split(':'), kind = parts[0], id = Number(parts[1]);
-                if (kind === 'file') openFileDownload(id);
-                else if (kind === 'folder') downloadFolder(id);
+                if (kind === 'folder') {
+                    setTimeout(() => triggerDownload(folderDownloadUrl(id)), i * 400);
+                } else if (kind === 'file') {
+                    api('anchor_fm_preview', { file_id: id }).then(res => {
+                        if (res && res.success && res.data.preview && res.data.preview.downloadUrl) {
+                            triggerDownload(res.data.preview.downloadUrl);
+                        }
+                    });
+                }
             });
             return;
         }
@@ -1605,16 +1641,30 @@ jQuery(function ($) {
         }
     });
 
+    function triggerDownload(url) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); }, 1000);
+    }
+
     function openFileDownload(fileId) {
         api('anchor_fm_preview', { file_id: fileId }).then(res => {
             if (res && res.success && res.data.preview && res.data.preview.downloadUrl) {
-                window.location.href = res.data.preview.downloadUrl;
+                triggerDownload(res.data.preview.downloadUrl);
             }
         });
     }
 
+    function folderDownloadUrl(folderId) {
+        return `${AnchorFM.ajax}?action=anchor_fm_download_folder&folder_id=${folderId}&nonce=${AnchorFM.nonce}`;
+    }
+
     function downloadFolder(folderId) {
-        window.location = `${AnchorFM.ajax}?action=anchor_fm_download_folder&folder_id=${folderId}&nonce=${AnchorFM.nonce}`;
+        window.location = folderDownloadUrl(folderId);
     }
 
     function findRow(kind, id) {
@@ -1754,7 +1804,19 @@ jQuery(function ($) {
             label: $b.data('label') || ''
         }).then(res => {
             const $n = $modalBody.find('[data-afm-request-notice]').prop('hidden', false);
-            $n.text(res && res.success ? 'Request sent. The site team has been notified.' : 'Could not send request.');
+            const d = (res && res.data) || {};
+            let msg;
+            if (!res || !res.success) {
+                msg = (d.message) || 'Could not send request. Please try again later.';
+                $b.prop('disabled', false); // allow a retry on failure
+            } else if (d.alreadyHasAccess) {
+                msg = 'You already have access to this item.';
+            } else if (d.throttled) {
+                msg = 'You already requested access recently — the team has been notified.';
+            } else {
+                msg = 'Request sent. The site team has been notified.';
+            }
+            $n.text(msg);
         });
     });
 
@@ -1786,12 +1848,27 @@ jQuery(function ($) {
         $root.addClass('afm--dragMode');
     });
 
-    $root.on('dragend', '[data-afm-file-card],[data-afm-folder-card],[data-afm-open-folder]', function () {
+    // Finder rows: files and folders drag onto folder rows (or the sidebar tree) to move.
+    $root.on('dragstart', '[data-afm-row]', function (e) {
+        if (!AnchorFM.isAdmin) return;
+        const kind = $(this).data('afm-row-kind');
+        const id = Number($(this).data('afm-row-id'));
+        if (kind === 'file') { dragFileId = id; dragFolderId = null; }
+        else if (kind === 'folder') { dragFolderId = id; dragFileId = null; }
+        else return;
+        if (e.originalEvent && e.originalEvent.dataTransfer) {
+            e.originalEvent.dataTransfer.effectAllowed = 'move';
+            e.originalEvent.dataTransfer.setData('text/plain', String(id));
+        }
+        $root.addClass('afm--dragMode');
+    });
+
+    $root.on('dragend', '[data-afm-file-card],[data-afm-folder-card],[data-afm-open-folder],[data-afm-row]', function () {
         dragFileId = null;
         dragFolderId = null;
         $root.removeClass('afm--drag');
         $root.removeClass('afm--dragMode');
-        $root.find('.afm__card--folder, .afm__treeBtn').removeClass('is-drop');
+        $root.find('.afm__card--folder, .afm__treeBtn, .afm__row--folder').removeClass('is-drop');
     });
 
     // Use capture on document to better catch drops over folder cards
@@ -1799,8 +1876,8 @@ jQuery(function ($) {
         if (!AnchorFM.isAdmin) return;
         if (!dragFileId && !dragFolderId) return;
         const el = document.elementFromPoint(e.clientX, e.clientY);
-        const $target = $(el).closest('[data-afm-folder-card], [data-afm-open-folder]');
-        $root.find('.afm__card--folder, .afm__treeBtn').removeClass('is-drop');
+        const $target = $(el).closest('[data-afm-folder-card], [data-afm-open-folder], [data-afm-row-kind="folder"]');
+        $root.find('.afm__card--folder, .afm__treeBtn, .afm__row--folder').removeClass('is-drop');
         if ($target.length) {
             e.preventDefault();
             if (e.originalEvent && e.originalEvent.dataTransfer) {
@@ -1810,14 +1887,14 @@ jQuery(function ($) {
         }
     });
 
-    $root.on('dragleave', '[data-afm-folder-card], [data-afm-open-folder]', function () {
+    $root.on('dragleave', '[data-afm-folder-card], [data-afm-open-folder], [data-afm-row-kind="folder"]', function () {
         $(this).removeClass('is-drop');
     });
-    $root.on('drop', '[data-afm-folder-card], [data-afm-open-folder]', function (e) {
+    $root.on('drop', '[data-afm-folder-card], [data-afm-open-folder], [data-afm-row-kind="folder"]', function (e) {
         if (!AnchorFM.isAdmin) return;
         if (!dragFileId && !dragFolderId) return;
         e.preventDefault();
-        const folderId = Number($(this).data('afm-folder-card') || $(this).data('afm-open-folder'));
+        const folderId = Number($(this).data('afm-folder-card') || $(this).data('afm-open-folder') || $(this).data('afm-row-id'));
         if (productDocsFolderId && folderId === productDocsFolderId) return;
         handleDropOnFolder($(this), folderId);
     });
@@ -1826,10 +1903,10 @@ jQuery(function ($) {
         if (!AnchorFM.isAdmin) return;
         if (!dragFileId && !dragFolderId) return;
         const el = document.elementFromPoint(e.clientX, e.clientY);
-        const $target = $(el).closest('[data-afm-folder-card], [data-afm-open-folder]');
+        const $target = $(el).closest('[data-afm-folder-card], [data-afm-open-folder], [data-afm-row-kind="folder"]');
         if ($target.length) {
             e.preventDefault();
-        const folderId = Number($target.data('afm-folder-card') || $target.data('afm-open-folder'));
+        const folderId = Number($target.data('afm-folder-card') || $target.data('afm-open-folder') || $target.data('afm-row-id'));
         if (productDocsFolderId && folderId === productDocsFolderId) return;
         handleDropOnFolder($target, folderId);
         }
