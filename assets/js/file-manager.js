@@ -1610,6 +1610,53 @@ jQuery(function ($) {
         if (kind === 'file' || kind === 'video') openViewer(kind, id);
     }
 
+    function startInlineRename(kind, id) {
+        if (!AnchorFM.isAdmin) return;
+        const $row = $grid.find(`[data-afm-row="${kind}:${id}"]`);
+        const $label = $row.find('[data-afm-row-label]');
+        if (!$label.length || $row.find('input.afm__renameInput').length) return;
+        const current = $label.text();
+        const $input = $(`<input type="text" class="afm__renameInput">`).val(current);
+        $label.hide().after($input);
+        $input.trigger('focus').trigger('select');
+
+        function commit() {
+            const name = String($input.val() || '').trim();
+            $input.prop('disabled', true);
+            if (!name || name === current) { cancel(); return; }
+            const action = kind === 'folder' ? 'anchor_fm_rename_folder'
+                : kind === 'video' ? 'anchor_fm_vimeo_update'
+                : kind === 'file' ? 'anchor_fm_rename_file' : null;
+            if (!action) { cancel(); return; }
+            const data = {};
+            if (kind === 'folder') { data.folder_id = id; data.name = name; }
+            if (kind === 'video') { data.video_id = id; data.title = name; }
+            if (kind === 'file') { data.file_id = id; data.name = name; }
+            api(action, data).then(res => {
+                if (res && res.success) reloadCurrentFolder(); else cancel();
+            });
+        }
+        function cancel() { $input.remove(); $label.show(); }
+        $input.on('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); commit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        });
+        $input.on('blur', commit);
+    }
+
+    $root.on('keydown', function (e) {
+        if (e.key === 'F2' && AnchorFM.isAdmin) {
+            const $r = $grid.find('.afm__row.is-active');
+            if ($r.length) startInlineRename($r.data('afm-row-kind'), Number($r.data('afm-row-id')));
+        }
+    });
+    $root.on('dblclick', '[data-afm-row-label]', function (e) {
+        if (!AnchorFM.isAdmin) return;
+        e.stopPropagation();
+        const $r = $(this).closest('[data-afm-row]');
+        startInlineRename($r.data('afm-row-kind'), Number($r.data('afm-row-id')));
+    });
+
     // Drag to move files into folders (admin/manage only)
     let dragFileId = null;
     let dragFolderId = null;
