@@ -51,6 +51,7 @@ class Anchor_Private_File_Manager {
 
         add_action('wp_ajax_anchor_fm_search', [$this, 'ajax_search']);
         add_action('wp_ajax_anchor_fm_rename_file', [$this, 'ajax_rename_file']);
+        add_action('wp_ajax_anchor_fm_vimeo_get', [$this, 'ajax_vimeo_get']);
         add_action('wp_ajax_anchor_fm_vimeo_add', [$this, 'ajax_vimeo_add']);
         add_action('wp_ajax_anchor_fm_vimeo_update', [$this, 'ajax_vimeo_update']);
         add_action('wp_ajax_anchor_fm_vimeo_delete', [$this, 'ajax_vimeo_delete']);
@@ -1511,6 +1512,9 @@ class Anchor_Private_File_Manager {
         $folders_table = self::table('folders');
         $files_table = self::table('files');
         $perms_table = self::table('permissions');
+        $links_table = self::table('links');
+        $videos_table = self::table('videos');
+        $video_views_table = self::table('video_views');
 
         $folder = $this->get_folder_row($folder_id);
         if (!$folder) {
@@ -1580,6 +1584,29 @@ class Anchor_Private_File_Manager {
                 ["DELETE FROM {$perms_table} WHERE entity_type = 'folder' AND entity_id IN ({$dph})"],
                 $folder_ids
             )));
+
+            // Remove links in these folders.
+            $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                ["DELETE FROM {$links_table} WHERE folder_id IN ({$dph})"],
+                $folder_ids
+            )));
+
+            // Remove videos in these folders and their watch-history rows.
+            $video_ids = $wpdb->get_col(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                ["SELECT id FROM {$videos_table} WHERE folder_id IN ({$dph})"],
+                $folder_ids
+            )));
+            if ($video_ids) {
+                $vph = implode(',', array_fill(0, count($video_ids), '%d'));
+                $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                    ["DELETE FROM {$video_views_table} WHERE video_id IN ({$vph})"],
+                    array_map('intval', $video_ids)
+                )));
+                $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                    ["DELETE FROM {$videos_table} WHERE id IN ({$vph})"],
+                    array_map('intval', $video_ids)
+                )));
+            }
 
             $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
                 ["DELETE FROM {$folders_table} WHERE id IN ({$dph})"],
@@ -1811,6 +1838,26 @@ class Anchor_Private_File_Manager {
         $this->json_success(['linkId' => $link_id]);
     }
 
+    public function ajax_vimeo_get() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        if ($video_id <= 0) $this->json_error('Missing video_id');
+
+        $video = $this->get_video_row($video_id);
+        if (!$video) $this->json_error('Not found', 404);
+        if (!$this->can_user_view_video($user_id, $video_id)) $this->json_error('Forbidden', 403);
+
+        $this->json_success(['video' => [
+            'id' => (int) $video->id,
+            'title' => $video->title,
+            'vimeoId' => $video->vimeo_id,
+            'folderId' => (int) $video->folder_id,
+        ]]);
+    }
+
     public function ajax_vimeo_add() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -1980,6 +2027,35 @@ class Anchor_Private_File_Manager {
             $this->json_error('Invalid request');
         }
 
+        // Resolve the entity and confirm it exists, then confirm the requester
+        // genuinely lacks view access. This is the "access denied for a real
+        // item" flow — refusing arbitrary ids prevents using it for mail spam.
+        $exists = false;
+        $can_view = false;
+        switch ($entity_type) {
+            case 'file':
+                $exists = (bool) $this->get_file_row($entity_id);
+                $can_view = $exists && $this->can_user_view_file($user_id, $entity_id);
+                break;
+            case 'folder':
+                $exists = (bool) $this->get_folder_row($entity_id);
+                $can_view = $exists && $this->can_user_view_folder($user_id, $entity_id);
+                break;
+            case 'video':
+                $exists = (bool) $this->get_video_row($entity_id);
+                $can_view = $exists && $this->can_user_view_video($user_id, $entity_id);
+                break;
+            case 'link':
+                $exists = (bool) $this->get_link_row($entity_id);
+                $can_view = $exists && $this->can_user_view_link($user_id, $entity_id);
+                break;
+        }
+        if (!$exists) $this->json_error('Not found', 404);
+        if ($can_view) {
+            // Already has access — nothing to request, nothing to email.
+            $this->json_success(['sent' => false, 'alreadyHasAccess' => true]);
+        }
+
         $rate_key = 'afm_reqacc_' . $user_id . '_' . $entity_type . '_' . $entity_id;
         if (get_transient($rate_key)) {
             $this->json_success(['sent' => true, 'throttled' => true]);
@@ -1994,7 +2070,11 @@ class Anchor_Private_File_Manager {
         $body .= "Item: {$label} ({$entity_type} #{$entity_id})\n";
         $body .= "Time: " . current_time('mysql') . "\n";
 
-        wp_mail($to, $subject, $body);
+        $sent = wp_mail($to, $subject, $body);
+        if (!$sent) {
+            // Don't throttle or report success on delivery failure, so the user can retry.
+            $this->json_error('Could not send the request right now. Please try again later.', 500);
+        }
         set_transient($rate_key, 1, HOUR_IN_SECONDS);
         $this->log_activity($user_id, 'request_access', $entity_type, $entity_id, ['to' => $to]);
 
