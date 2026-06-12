@@ -630,6 +630,30 @@ jQuery(function ($) {
         state.modalMode = 'viewer';
     }
 
+    let activePlayer = null;
+
+    function openVideoViewer(videoId) {
+        const v = findRow('video', videoId);
+        if (!v || !v.vimeoId) {
+            if (typeof showAccessDenied === 'function') showAccessDenied('video', videoId, '');
+            return;
+        }
+        const playerId = 'afmVPlayer_' + videoId;
+        let body = `<div class="afm__vplayer"><div id="${playerId}" class="afm__vplayerFrame" data-afm-video-frame></div></div>`;
+        if (AnchorFM.isAdmin) {
+            body += `<div class="afm__vhistory" data-afm-video-history><div class="afm__sectionTitle">Watch history</div><div class="afm__vhistoryBody">Loading…</div></div>`;
+        }
+        openViewerModal(esc(v.name), body, '');
+        mountVimeoPlayer(playerId, v.vimeoId, videoId);
+        if (AnchorFM.isAdmin) loadVideoHistory(videoId);
+    }
+
+    function mountVimeoPlayer(elId, vimeoId, videoId) {
+        if (!window.Vimeo || !window.Vimeo.Player) return;
+        activePlayer = new window.Vimeo.Player(elId, { id: Number(vimeoId), responsive: true });
+        startVideoTracking(activePlayer, videoId);
+    }
+
     function openPermissions(entityType, entityId) {
         state.selectedEntity = { entityType, entityId: Number(entityId) };
         $modalBody.html('<div class="afm__skeleton afm__skeleton--share"></div>');
