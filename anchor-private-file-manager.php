@@ -1298,6 +1298,25 @@ class Anchor_Private_File_Manager {
             }
         }
 
+        $video_list = [];
+        if ($folder_id > 0) {
+            $videos_table = self::table('videos');
+            $video_rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, folder_id, vimeo_id, title, created_by, created_at FROM {$videos_table} WHERE folder_id = %d ORDER BY created_at DESC",
+                $folder_id
+            ));
+            foreach ((array) $video_rows as $v) {
+                if (!$this->can_user_view_video($user_id, (int) $v->id)) continue;
+                $video_list[] = [
+                    'id' => (int) $v->id,
+                    'title' => $v->title,
+                    'vimeoId' => $v->vimeo_id,
+                    'createdBy' => !empty($v->created_by) ? (int) $v->created_by : 0,
+                    'createdAt' => $v->created_at,
+                ];
+            }
+        }
+
         $cap = $folder_id === 0 ? (user_can($user_id, 'administrator') ? 'manage' : 'view') : $this->get_effective_capability($user_id, 'folder', $folder_id);
         $this->json_success([
             'folderId' => $folder_id,
@@ -1305,6 +1324,7 @@ class Anchor_Private_File_Manager {
             'folders' => $subfolders,
             'links' => $link_list,
             'files' => $file_list,
+            'videos' => $video_list,
             'capability' => $cap,
             'isProductDocs' => $folder_id === $product_docs_id,
         ]);
