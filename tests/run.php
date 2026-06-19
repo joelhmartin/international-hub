@@ -67,5 +67,13 @@ check('derive basic', Anchor_FM_User_Import::derive_username('Jane', 'Smith'), '
 check('derive trims', Anchor_FM_User_Import::derive_username('  Bob ', ' Lee '), 'b.lee');
 check('derive lowercases', Anchor_FM_User_Import::derive_username('AL', 'CAPONE'), 'a.capone');
 
+// --- Anchor_FM_User_Import::make_unique ---
+$none = function ($n) { return false; };
+check('unique passthrough', Anchor_FM_User_Import::make_unique('j.smith', $none), 'j.smith');
+
+$taken = ['j.smith' => true, 'j.smith2' => true];
+$exists = function ($n) use ($taken) { return isset($taken[$n]); };
+check('unique suffixes past taken', Anchor_FM_User_Import::make_unique('j.smith', $exists), 'j.smith3');
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);

@@ -21,4 +21,23 @@ class Anchor_FM_User_Import {
         $initial = $first === '' ? '' : substr($first, 0, 1);
         return self::sanitize_username($initial . '.' . $last);
     }
+
+    /**
+     * Return a username not rejected by $exists($name) (true = taken).
+     * Appends 2,3,... to $base until a free name is found.
+     */
+    public static function make_unique($base, callable $exists) {
+        $base = $base === '' ? 'user' : $base;
+        if (!$exists($base)) {
+            return $base;
+        }
+        $i = 2;
+        while ($exists($base . $i)) {
+            $i++;
+            if ($i > self::MAX_ROWS + 2) {
+                break; // safety valve; never expected to hit
+            }
+        }
+        return $base . $i;
+    }
 }
