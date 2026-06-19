@@ -55,5 +55,17 @@ check('percent capped', $r4['percent'], 100);
 $r5 = Anchor_FM_Watch_Math::apply_progress($start, 5, 5, 0);
 check('zero duration percent', $r5['percent'], 0);
 
+require __DIR__ . '/../includes/class-afm-user-import.php';
+
+// --- Anchor_FM_User_Import::sanitize_username ---
+check('sanitize lowercases', Anchor_FM_User_Import::sanitize_username('J.Smith'), 'j.smith');
+check('sanitize strips spaces/symbols', Anchor_FM_User_Import::sanitize_username('Mary O\'Brien!'), 'maryobrien');
+check('sanitize keeps dot/dash/underscore', Anchor_FM_User_Import::sanitize_username('a.b-c_d'), 'a.b-c_d');
+
+// --- Anchor_FM_User_Import::derive_username ---
+check('derive basic', Anchor_FM_User_Import::derive_username('Jane', 'Smith'), 'j.smith');
+check('derive trims', Anchor_FM_User_Import::derive_username('  Bob ', ' Lee '), 'b.lee');
+check('derive lowercases', Anchor_FM_User_Import::derive_username('AL', 'CAPONE'), 'a.capone');
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
