@@ -1145,3 +1145,20 @@
 /* .afm__notice already defined -- skip */
 .afm__formRow { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .afm__sectionTitle { font-weight: 700; font-size: 13px; margin-bottom: 8px; }
+
+/* --- Bulk user import --- */
+.afm__userImport { max-width: 760px; }
+.afm__importHint { margin: 0 0 16px; opacity: 0.8; font-size: 13px; line-height: 1.5; }
+.afm__importFile { display: block; }
+.afm__check { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
+.afm__formActions { margin-top: 16px; }
+.afm__importResults { margin-top: 20px; }
+.afm__importSummary { font-weight: 600; margin-bottom: 10px; }
+.afm__importSummary--error { color: #b32d2e; }
+.afm__importTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.afm__importTable th,
+.afm__importTable td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(0,0,0,0.08); }
+.afm__importTable th { font-weight: 600; }
+.afm__importRow--created td:nth-child(4) { color: #1a7f37; font-weight: 600; }
+.afm__importRow--skipped td:nth-child(4) { color: #9a6700; font-weight: 600; }
+.afm__importRow--error td:nth-child(4) { color: #b32d2e; font-weight: 600; }
