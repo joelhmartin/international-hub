@@ -9,6 +9,7 @@
 if (!defined('ABSPATH')) exit;
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
 
 class Anchor_Private_File_Manager {
 
@@ -62,6 +63,7 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_get_permissions', [$this, 'ajax_get_permissions']);
         add_action('wp_ajax_anchor_fm_set_permissions', [$this, 'ajax_set_permissions']);
         add_action('wp_ajax_anchor_fm_user_search', [$this, 'ajax_user_search']);
+        add_action('wp_ajax_anchor_fm_bulk_import_users', [$this, 'ajax_bulk_import_users']);
 
         add_action('wp_ajax_anchor_ap_orders', [$this, 'ajax_ap_orders']);
         add_action('wp_ajax_anchor_ap_order', [$this, 'ajax_ap_order']);
@@ -2518,6 +2520,113 @@ class Anchor_Private_File_Manager {
             ];
         }
         $this->json_success(['users' => $out]);
+    }
+
+    public function ajax_bulk_import_users() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
+
+        // Role (one for the whole batch; administrator not allowed).
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        $valid_roles = array_column($this->get_editable_roles_for_permissions(), 'key');
+        if ($role === '' || !in_array($role, $valid_roles, true)) {
+            $this->json_error('Please choose a valid role.');
+        }
+        $send_email = !empty($_POST['send_email']) && $_POST['send_email'] !== '0';
+
+        // Uploaded CSV.
+        if (empty($_FILES['csv']) || !isset($_FILES['csv']['tmp_name']) || $_FILES['csv']['error'] !== UPLOAD_ERR_OK) {
+            $this->json_error('No CSV file was uploaded.');
+        }
+        if ((int) $_FILES['csv']['size'] > 2 * 1024 * 1024) {
+            $this->json_error('CSV file is too large (max 2 MB).');
+        }
+        $raw = file_get_contents($_FILES['csv']['tmp_name']);
+        if ($raw === false || trim($raw) === '') {
+            $this->json_error('The CSV file is empty.');
+        }
+
+        $parsed = Anchor_FM_User_Import::parse($raw);
+        $rows = $parsed['rows'];
+        if (count($rows) > Anchor_FM_User_Import::MAX_ROWS) {
+            $this->json_error(sprintf('Too many rows (%d). Maximum is %d.', count($rows), Anchor_FM_User_Import::MAX_ROWS));
+        }
+
+        $created = 0; $skipped = 0; $errors = 0;
+        $report = [];
+        $seen_emails = [];
+        $batch_usernames = [];
+
+        foreach ($rows as $row) {
+            $line = (int) $row['line'];
+            $row['first_name'] = sanitize_text_field($row['first_name']);
+            $row['last_name']  = sanitize_text_field($row['last_name']);
+            $row['email']      = Anchor_FM_User_Import::normalize_email($row['email']);
+            $row['username']   = Anchor_FM_User_Import::sanitize_username($row['username']);
+
+            $v = Anchor_FM_User_Import::validate($row);
+            if (!$v['ok']) {
+                $errors++;
+                $report[] = ['line' => $line, 'username' => $row['username'], 'email' => $row['email'], 'status' => 'error', 'message' => $v['error']];
+                continue;
+            }
+
+            // Duplicate email: existing WP user or repeated within this CSV.
+            if (isset($seen_emails[$row['email']]) || email_exists($row['email'])) {
+                $skipped++;
+                $report[] = ['line' => $line, 'username' => $row['username'], 'email' => $row['email'], 'status' => 'skipped', 'message' => 'Email already exists'];
+                continue;
+            }
+
+            // Username: supplied or derived; made unique vs WP + this batch.
+            $base = $row['username'] !== '' ? $row['username'] : Anchor_FM_User_Import::derive_username($row['first_name'], $row['last_name']);
+            $username = Anchor_FM_User_Import::make_unique($base, function ($name) use ($batch_usernames) {
+                return isset($batch_usernames[$name]) || username_exists($name);
+            });
+
+            $password = wp_generate_password(16, true, false);
+            $user_id = wp_insert_user([
+                'user_login'   => $username,
+                'user_email'   => $row['email'],
+                'user_pass'    => $password,
+                'first_name'   => $row['first_name'],
+                'last_name'    => $row['last_name'],
+                'display_name' => trim($row['first_name'] . ' ' . $row['last_name']),
+                'role'         => $role,
+            ]);
+
+            if (is_wp_error($user_id)) {
+                $errors++;
+                $report[] = ['line' => $line, 'username' => $username, 'email' => $row['email'], 'status' => 'error', 'message' => $user_id->get_error_message()];
+                continue;
+            }
+
+            $batch_usernames[$username] = true;
+            $seen_emails[$row['email']] = true;
+            $created++;
+
+            if ($send_email) {
+                wp_new_user_notification($user_id, null, 'user');
+            }
+
+            $report[] = ['line' => $line, 'username' => $username, 'email' => $row['email'], 'status' => 'created', 'message' => ''];
+        }
+
+        $this->log_activity(get_current_user_id(), 'bulk_import', 'user', 0, [
+            'created' => $created,
+            'skipped' => $skipped,
+            'errors'  => $errors,
+            'role'    => $role,
+            'emailed' => $send_email,
+        ]);
+
+        $this->json_success([
+            'created' => $created,
+            'skipped' => $skipped,
+            'errors'  => $errors,
+            'rows'    => $report,
+        ]);
     }
 
     private function get_editable_roles_for_permissions() {
