@@ -78,6 +78,9 @@ check('unique suffixes past taken', Anchor_FM_User_Import::make_unique('j.smith'
 // --- Anchor_FM_User_Import::is_header_row ---
 check('header detected by email', Anchor_FM_User_Import::is_header_row(['username','first name','last name','email']), true);
 check('non-header not detected', Anchor_FM_User_Import::is_header_row(['jsmith','Jane','Smith','jane@x.com']), false);
+check('single token not header', Anchor_FM_User_Import::is_header_row(['login','Jane','Smith','jane@x.com']), false);
+check('one header key not enough', Anchor_FM_User_Import::is_header_row(['Last','Bob','Lee','bob@x.com']), false);
+check('two distinct header keys is header', Anchor_FM_User_Import::is_header_row(['email','first name']), true);
 
 // --- Anchor_FM_User_Import::parse (positional, no header) ---
 $p = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com\n,Bob,Lee,bob@x.com\n");

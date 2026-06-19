@@ -71,14 +71,16 @@ class Anchor_FM_User_Import {
         }
     }
 
-    /** True if the row looks like a header (any recognized header cell). */
+    /** True if the row looks like a header (2 or more distinct recognized header keys). */
     public static function is_header_row($cells) {
+        $distinct = [];
         foreach ((array) $cells as $cell) {
-            if (self::header_key($cell) !== '') {
-                return true;
+            $key = self::header_key($cell);
+            if ($key !== '') {
+                $distinct[$key] = true;
             }
         }
-        return false;
+        return count($distinct) >= 2;
     }
 
     /**
@@ -97,7 +99,7 @@ class Anchor_FM_User_Import {
             if (trim($line) !== '') { $first_idx = $i; break; }
         }
         if ($first_idx !== null) {
-            $cells = str_getcsv($lines[$first_idx]);
+            $cells = str_getcsv($lines[$first_idx], ',', '"', '');
             if (self::is_header_row($cells)) {
                 $header_detected = true;
                 $col_map = [];
@@ -111,7 +113,7 @@ class Anchor_FM_User_Import {
         foreach ($lines as $i => $line) {
             if (trim($line) === '') { continue; }
             if ($header_detected && $i === $first_idx) { continue; } // skip header line
-            $cells = str_getcsv($line);
+            $cells = str_getcsv($line, ',', '"', '');
             $row = ['line' => $i + 1, 'username' => '', 'first_name' => '', 'last_name' => '', 'email' => ''];
             foreach ($cells as $idx => $val) {
                 $key = isset($col_map[$idx]) ? $col_map[$idx] : '';
