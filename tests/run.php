@@ -101,5 +101,25 @@ check('header data line number', $h['rows'][0]['line'], 2);
 $b = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com\n\n   \n,Bob,Lee,bob@x.com\n");
 check('blank lines skipped', count($b['rows']), 2);
 
+// --- Anchor_FM_User_Import::normalize_email ---
+check('normalize email', Anchor_FM_User_Import::normalize_email('  Jane@X.COM '), 'jane@x.com');
+
+// --- Anchor_FM_User_Import::validate ---
+$ok = Anchor_FM_User_Import::validate(['first_name'=>'Jane','last_name'=>'Smith','email'=>'jane@x.com','username'=>'']);
+check('valid row ok', $ok['ok'], true);
+check('valid row no error', $ok['error'], '');
+
+$bad_email = Anchor_FM_User_Import::validate(['first_name'=>'Jane','last_name'=>'Smith','email'=>'not-an-email','username'=>'']);
+check('bad email not ok', $bad_email['ok'], false);
+check('bad email message', $bad_email['error'], 'Invalid or missing email');
+
+$no_first = Anchor_FM_User_Import::validate(['first_name'=>'','last_name'=>'Smith','email'=>'jane@x.com','username'=>'']);
+check('missing first not ok', $no_first['ok'], false);
+check('missing first message', $no_first['error'], 'Missing first name');
+
+$no_last = Anchor_FM_User_Import::validate(['first_name'=>'Jane','last_name'=>'','email'=>'jane@x.com','username'=>'']);
+check('missing last not ok', $no_last['ok'], false);
+check('missing last message', $no_last['error'], 'Missing last name');
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);

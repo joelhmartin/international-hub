@@ -124,4 +124,30 @@ class Anchor_FM_User_Import {
 
         return ['header_detected' => $header_detected, 'rows' => $rows];
     }
+
+    /** Lowercase + trim an email. */
+    public static function normalize_email($raw) {
+        return strtolower(trim((string) $raw));
+    }
+
+    /**
+     * Validate a canonical row. Returns ['ok'=>bool, 'error'=>string].
+     * Checks email, then first name, then last name.
+     */
+    public static function validate($row) {
+        $email = isset($row['email']) ? trim((string) $row['email']) : '';
+        $first = isset($row['first_name']) ? trim((string) $row['first_name']) : '';
+        $last  = isset($row['last_name']) ? trim((string) $row['last_name']) : '';
+
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => false, 'error' => 'Invalid or missing email'];
+        }
+        if ($first === '') {
+            return ['ok' => false, 'error' => 'Missing first name'];
+        }
+        if ($last === '') {
+            return ['ok' => false, 'error' => 'Missing last name'];
+        }
+        return ['ok' => true, 'error' => ''];
+    }
 }
