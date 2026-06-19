@@ -75,5 +75,31 @@ $taken = ['j.smith' => true, 'j.smith2' => true];
 $exists = function ($n) use ($taken) { return isset($taken[$n]); };
 check('unique suffixes past taken', Anchor_FM_User_Import::make_unique('j.smith', $exists), 'j.smith3');
 
+// --- Anchor_FM_User_Import::is_header_row ---
+check('header detected by email', Anchor_FM_User_Import::is_header_row(['username','first name','last name','email']), true);
+check('non-header not detected', Anchor_FM_User_Import::is_header_row(['jsmith','Jane','Smith','jane@x.com']), false);
+
+// --- Anchor_FM_User_Import::parse (positional, no header) ---
+$p = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com\n,Bob,Lee,bob@x.com\n");
+check('positional no header flag', $p['header_detected'], false);
+check('positional row count', count($p['rows']), 2);
+check('positional username', $p['rows'][0]['username'], 'jsmith');
+check('positional first', $p['rows'][0]['first_name'], 'Jane');
+check('positional email', $p['rows'][0]['email'], 'jane@x.com');
+check('positional blank username kept', $p['rows'][1]['username'], '');
+check('positional line number', $p['rows'][1]['line'], 2);
+
+// --- parse with header in a different column order ---
+$h = Anchor_FM_User_Import::parse("email,first name,last name\njane@x.com,Jane,Smith\n");
+check('header detected flag', $h['header_detected'], true);
+check('header maps email', $h['rows'][0]['email'], 'jane@x.com');
+check('header maps first', $h['rows'][0]['first_name'], 'Jane');
+check('header missing username empty', $h['rows'][0]['username'], '');
+check('header data line number', $h['rows'][0]['line'], 2);
+
+// --- blank lines skipped ---
+$b = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com\n\n   \n,Bob,Lee,bob@x.com\n");
+check('blank lines skipped', count($b['rows']), 2);
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);

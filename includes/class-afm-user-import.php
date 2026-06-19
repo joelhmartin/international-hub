@@ -40,4 +40,88 @@ class Anchor_FM_User_Import {
         }
         return $base . $i;
     }
+
+    /** Canonical column key for a header cell, or '' if unrecognized. */
+    private static function header_key($cell) {
+        $c = strtolower(trim((string) $cell));
+        $c = str_replace(['_', '-'], ' ', $c);
+        $c = preg_replace('/\s+/', ' ', $c);
+        switch ($c) {
+            case 'username':
+            case 'user name':
+            case 'login':
+                return 'username';
+            case 'first name':
+            case 'first':
+            case 'firstname':
+            case 'given name':
+                return 'first_name';
+            case 'last name':
+            case 'last':
+            case 'lastname':
+            case 'surname':
+            case 'family name':
+                return 'last_name';
+            case 'email':
+            case 'email address':
+            case 'e mail':
+                return 'email';
+            default:
+                return '';
+        }
+    }
+
+    /** True if the row looks like a header (any recognized header cell). */
+    public static function is_header_row($cells) {
+        foreach ((array) $cells as $cell) {
+            if (self::header_key($cell) !== '') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Parse raw CSV text into canonical rows.
+     * @return array ['header_detected'=>bool, 'rows'=>array]
+     */
+    public static function parse($raw) {
+        $lines = preg_split('/\r\n|\r|\n/', (string) $raw);
+        $default_cols = ['username', 'first_name', 'last_name', 'email'];
+
+        // Find the first non-blank line to test for a header.
+        $header_detected = false;
+        $col_map = $default_cols; // index => canonical key
+        $first_idx = null;
+        foreach ($lines as $i => $line) {
+            if (trim($line) !== '') { $first_idx = $i; break; }
+        }
+        if ($first_idx !== null) {
+            $cells = str_getcsv($lines[$first_idx]);
+            if (self::is_header_row($cells)) {
+                $header_detected = true;
+                $col_map = [];
+                foreach ($cells as $idx => $cell) {
+                    $col_map[$idx] = self::header_key($cell); // '' for unknown
+                }
+            }
+        }
+
+        $rows = [];
+        foreach ($lines as $i => $line) {
+            if (trim($line) === '') { continue; }
+            if ($header_detected && $i === $first_idx) { continue; } // skip header line
+            $cells = str_getcsv($line);
+            $row = ['line' => $i + 1, 'username' => '', 'first_name' => '', 'last_name' => '', 'email' => ''];
+            foreach ($cells as $idx => $val) {
+                $key = isset($col_map[$idx]) ? $col_map[$idx] : '';
+                if ($key !== '' && isset($row[$key])) {
+                    $row[$key] = trim((string) $val);
+                }
+            }
+            $rows[] = $row;
+        }
+
+        return ['header_detected' => $header_detected, 'rows' => $rows];
+    }
 }
