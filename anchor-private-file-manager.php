@@ -515,6 +515,7 @@ class Anchor_Private_File_Manager {
                 'displayName' => $user->display_name,
             ],
             'roles' => $this->get_editable_roles_for_permissions(),
+            'defaultRole' => (string) get_option('default_role'),
             'i18n' => [
                 'title' => __('File Manager', 'anchor-private-file-manager'),
                 'upload' => __('Upload', 'anchor-private-file-manager'),
@@ -526,6 +527,7 @@ class Anchor_Private_File_Manager {
                 'noFiles' => __('No files here yet.', 'anchor-private-file-manager'),
                 'noFolders' => __('No folders.', 'anchor-private-file-manager'),
                 'productDocs' => __('Product Docs', 'anchor-private-file-manager'),
+                'addUsers' => __('Add Users', 'anchor-private-file-manager'),
             ],
         ]);
 
@@ -600,6 +602,12 @@ class Anchor_Private_File_Manager {
                         <button type="button" class="aap__navItem" data-apfm-tab="product-docs">
                             <span class="dashicons dashicons-portfolio" aria-hidden="true"></span>
                             <?php esc_html_e('Product Docs', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <?php endif; ?>
+                        <?php if (current_user_can('administrator')) : ?>
+                        <button type="button" class="aap__navItem" data-apfm-tab="users">
+                            <span class="dashicons dashicons-groups" aria-hidden="true"></span>
+                            <?php esc_html_e('Add Users', 'anchor-private-file-manager'); ?>
                         </button>
                         <?php endif; ?>
                         <button type="button" class="aap__navItem" data-apfm-tab="account">
@@ -702,6 +710,36 @@ class Anchor_Private_File_Manager {
                                     </button>
                                     <div class="afm__notice" data-afm-product-docs-notice hidden></div>
                                 </div>
+                            </div>
+                        </div>
+                        <?php endif; ?>
+
+                        <?php if (current_user_can('administrator')) : ?>
+                        <div class="afm__panel aap__panel" data-apfm-panel="users" data-afm-panel="users">
+                            <div class="afm__cardBox afm__userImport">
+                                <div class="afm__sectionTitle"><?php esc_html_e('Bulk import users', 'anchor-private-file-manager'); ?></div>
+                                <p class="afm__importHint">
+                                    <?php esc_html_e('Upload a CSV with columns in this order: username, first name, last name, email. A header row is optional. Username is optional — when blank it becomes the first initial, a period, then the last name (e.g. j.smith). Passwords are generated automatically.', 'anchor-private-file-manager'); ?>
+                                </p>
+                                <div class="afm__formRow">
+                                    <label class="afm__label" for="afm-import-file"><?php esc_html_e('CSV file', 'anchor-private-file-manager'); ?></label>
+                                    <input type="file" id="afm-import-file" class="afm__importFile" accept=".csv,text/csv,text/plain" data-afm-import-file>
+                                </div>
+                                <div class="afm__formRow">
+                                    <label class="afm__label" for="afm-import-role"><?php esc_html_e('Assign role', 'anchor-private-file-manager'); ?></label>
+                                    <select id="afm-import-role" class="afm__select" data-afm-import-role></select>
+                                </div>
+                                <label class="afm__check">
+                                    <input type="checkbox" data-afm-import-email checked>
+                                    <?php esc_html_e('Email new users a link to set their password', 'anchor-private-file-manager'); ?>
+                                </label>
+                                <div class="afm__formActions">
+                                    <button type="button" class="afm__btn afm__btn--primary" data-afm-action="bulk-import-users">
+                                        <span class="dashicons dashicons-upload" aria-hidden="true"></span>
+                                        <?php esc_html_e('Import users', 'anchor-private-file-manager'); ?>
+                                    </button>
+                                </div>
+                                <div class="afm__importResults" data-afm-import-results hidden></div>
                             </div>
                         </div>
                         <?php endif; ?>
