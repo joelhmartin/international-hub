@@ -61,6 +61,7 @@ jQuery(function ($) {
             orders: AnchorAP.i18n && AnchorAP.i18n.orders ? AnchorAP.i18n.orders : 'Orders',
             downloads: AnchorAP.i18n && AnchorAP.i18n.downloads ? AnchorAP.i18n.downloads : 'Downloads',
             'product-docs': (fm && fm.i18n && fm.i18n.productDocs) ? fm.i18n.productDocs : 'Product Docs',
+            users: (fm && fm.i18n && fm.i18n.addUsers) ? fm.i18n.addUsers : 'Add Users',
             account: AnchorAP.i18n && AnchorAP.i18n.account ? AnchorAP.i18n.account : 'Account',
             security: AnchorAP.i18n && AnchorAP.i18n.security ? AnchorAP.i18n.security : 'Security',
         };
