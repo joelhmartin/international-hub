@@ -55,6 +55,7 @@ jQuery(function ($) {
         sortDir: 'asc',
         expandedRows: {},
         selectedRows: new Set(),
+        clipboard: null,
     };
 
     const SIDEBAR_MIN = 220;
@@ -246,6 +247,42 @@ jQuery(function ($) {
     }
 
     function rowKey(kind, id) { return kind + ':' + id; }
+
+    function clipboardItems() {
+        return (state.clipboard && Array.isArray(state.clipboard.items)) ? state.clipboard.items : [];
+    }
+    function setClipboard(items) {
+        state.clipboard = { items: items.slice() };
+        if (typeof toast === 'function') {
+            toast(items.length + ' item' + (items.length === 1 ? '' : 's') + ' copied');
+        }
+    }
+    function selectionAsItems() {
+        return Array.from(state.selectedRows).map(function (k) {
+            const p = String(k).split(':');
+            return { kind: p[0], id: Number(p[1]) };
+        });
+    }
+    function copyItems(items, targetFolderId) {
+        if (!items || !items.length) return;
+        $root.addClass('afm--busy');
+        return api('anchor_fm_copy_items', {
+            items: JSON.stringify(items),
+            target_folder_id: targetFolderId
+        }).done(function (res) {
+            if (res && res.success) {
+                const d = res.data || {};
+                let msg = (d.copied || 0) + ' copied';
+                if (d.errors) { msg += ', ' + d.errors + ' failed'; }
+                if (typeof toast === 'function') toast(msg);
+                bootstrap();
+                loadFolder(state.currentFolderId);
+            } else {
+                const m = res && res.data && res.data.message;
+                if (typeof toast === 'function') toast(m || 'Copy failed');
+            }
+        }).always(function () { $root.removeClass('afm--busy'); });
+    }
 
     function rowIcon(item) {
         if (item.kind === 'folder') return 'category';
@@ -1045,6 +1082,9 @@ jQuery(function ($) {
                 return;
             }
             if (action === 'copy-share-link') { if (typeof copyShareLink === 'function') copyShareLink(k, vid); return; }
+            if (action === 'copy') { setClipboard([{ kind: k, id: vid }]); return; }
+            if (action === 'duplicate') { copyItems([{ kind: k, id: vid }], state.currentFolderId); return; }
+            if (action === 'paste-into') { copyItems(clipboardItems(), vid); return; }
             if (action === 'rename') { if (typeof startInlineRename === 'function') startInlineRename(k, vid); return; }
             if (action === 'permissions') { openPermissions(k, vid); return; }
             if (action === 'edit-link') {
@@ -1193,6 +1233,11 @@ jQuery(function ($) {
         items.push({ action: 'show-in-folder', icon: 'category', label: 'Show in enclosing folder' });
         if (kind === 'file' || kind === 'video') items.push({ action: 'copy-share-link', icon: 'admin-links', label: 'Copy share link' });
         if (AnchorFM.isAdmin) {
+            if (kind === 'folder' && clipboardItems().length) {
+                items.push({ action: 'paste-into', icon: 'clipboard', label: 'Paste here' });
+            }
+            items.push({ action: 'duplicate', icon: 'admin-page', label: 'Duplicate' });
+            items.push({ action: 'copy', icon: 'admin-page', label: 'Copy' });
             if (kind !== 'link') items.push({ action: 'rename', icon: 'edit', label: 'Rename' });
             if (kind === 'link') items.push({ action: 'edit-link', icon: 'edit', label: 'Edit' });
             if (kind === 'folder' || kind === 'file') items.push({ action: 'permissions', icon: 'shield', label: 'Permissions' });
