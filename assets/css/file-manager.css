@@ -262,17 +262,62 @@
   min-width: 0;
 }
 
-.afm__crumbSep {
+/* Breadcrumb crumbs render as bare <button>s; style them as clean text links
+   rather than the default user-agent bordered boxes. */
+.afm__crumb {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.2;
   color: var(--afm-faint);
-  padding: 0 6px;
-}
-
-.afm__crumbText {
-  font-weight: 700;
-  max-width: 240px;
+  cursor: pointer;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.afm__crumb:hover {
+  background: var(--afm-panel);
+  color: var(--afm-text);
+}
+
+.afm__crumb:focus-visible {
+  outline: 2px solid var(--afm-accent);
+  outline-offset: 1px;
+}
+
+/* Deepest crumb = current folder: emphasized, not interactive-looking. */
+.afm__breadcrumbsTrail .afm__crumb:last-child {
+  color: var(--afm-text);
+  font-weight: 700;
+  cursor: default;
+}
+
+.afm__breadcrumbsTrail .afm__crumb:last-child:hover {
+  background: transparent;
+}
+
+.afm__crumb.is-static {
+  color: var(--afm-text);
+  cursor: default;
+}
+
+.afm__crumb.is-static:hover {
+  background: transparent;
+}
+
+.afm__crumbSep {
+  color: var(--afm-faint);
+  padding: 0 2px;
+  user-select: none;
 }
 
 .afm__toolbarRight {
