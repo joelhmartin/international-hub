@@ -1756,7 +1756,9 @@ jQuery(function ($) {
             ? `<button type="button" class="afm__btn afm__btn--secondary" data-afm-bulk="download">Download</button>`
             : '';
         const adminBtns = AnchorFM.isAdmin
-            ? `<button type="button" class="afm__btn afm__btn--danger" data-afm-bulk="delete">Delete</button>`
+            ? `<button type="button" class="afm__btn afm__btn--secondary" data-afm-bulk="copy">Copy</button>
+               <button type="button" class="afm__btn afm__btn--secondary" data-afm-bulk="duplicate">Duplicate</button>
+               <button type="button" class="afm__btn afm__btn--danger" data-afm-bulk="delete">Delete</button>`
             : '';
         $bar.html(`<span class="afm__bulkCount">${n} selected</span>
             ${downloadBtn}
@@ -1768,6 +1770,8 @@ jQuery(function ($) {
         const op = $(this).data('afm-bulk');
         const keys = Array.from(state.selectedRows);
         if (op === 'clear') { state.selectedRows.clear(); refreshSelectionUI(); return; }
+        if (op === 'copy') { setClipboard(selectionAsItems()); state.selectedRows.clear(); refreshSelectionUI(); return; }
+        if (op === 'duplicate') { copyItems(selectionAsItems(), state.currentFolderId); state.selectedRows.clear(); refreshSelectionUI(); return; }
         if (op === 'download') {
             // Each download must be its own request; assigning window.location in
             // a loop only keeps the last. Trigger a separate anchor click per item
