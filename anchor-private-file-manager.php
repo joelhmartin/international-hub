@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) exit;
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 
 class Anchor_Private_File_Manager {
 
@@ -1079,6 +1080,56 @@ class Anchor_Private_File_Manager {
                 'created_at' => $now,
             ], ['%s','%d','%s','%s','%s','%d','%s']);
         }
+    }
+
+    /** Display names of direct children of a folder (for collision checks). */
+    private function gather_existing_names($folder_id) {
+        global $wpdb;
+        $folder_id = (int) $folder_id;
+        $names = [];
+        $folders = self::table('folders');
+        $files = self::table('files');
+        $links = self::table('links');
+        $videos = self::table('videos');
+        foreach ((array) $wpdb->get_col($wpdb->prepare("SELECT name FROM {$folders} WHERE parent_id = %d", $folder_id)) as $n) { $names[] = $n; }
+        foreach ((array) $wpdb->get_col($wpdb->prepare("SELECT original_name FROM {$files} WHERE folder_id = %d", $folder_id)) as $n) { $names[] = $n; }
+        foreach ((array) $wpdb->get_col($wpdb->prepare("SELECT title FROM {$links} WHERE folder_id = %d", $folder_id)) as $n) { $names[] = $n; }
+        foreach ((array) $wpdb->get_col($wpdb->prepare("SELECT title FROM {$videos} WHERE folder_id = %d", $folder_id)) as $n) { $names[] = $n; }
+        return $names;
+    }
+
+    /** Copy a link row into a target folder. Returns new link id. */
+    private function copy_link_row($link, $target_folder_id, array &$existing, $force_copy) {
+        global $wpdb;
+        $title = Anchor_FM_Copy_Namer::resolve_unique($link->title, $existing, false, $force_copy);
+        $now = current_time('mysql');
+        $wpdb->insert(self::table('links'), [
+            'folder_id'  => (int) $target_folder_id,
+            'title'      => $title,
+            'url'        => $link->url,
+            'created_by' => get_current_user_id(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], ['%d','%s','%s','%d','%s','%s']);
+        $existing[] = $title;
+        return (int) $wpdb->insert_id;
+    }
+
+    /** Copy a video row (same vimeo_id) into a target folder. Returns new video id. */
+    private function copy_video_row($video, $target_folder_id, array &$existing, $force_copy) {
+        global $wpdb;
+        $title = Anchor_FM_Copy_Namer::resolve_unique($video->title, $existing, false, $force_copy);
+        $now = current_time('mysql');
+        $wpdb->insert(self::table('videos'), [
+            'folder_id'  => (int) $target_folder_id,
+            'vimeo_id'   => $video->vimeo_id,
+            'title'      => $title,
+            'created_by' => get_current_user_id(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], ['%d','%s','%s','%d','%s','%s']);
+        $existing[] = $title;
+        return (int) $wpdb->insert_id;
     }
 
     private function require_nonce() {
