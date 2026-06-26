@@ -1132,6 +1132,45 @@ class Anchor_Private_File_Manager {
         return (int) $wpdb->insert_id;
     }
 
+    /** Copy a file (disk bytes + DB row) into a target folder. Returns new id or WP_Error. */
+    private function copy_file_row($file, $target_folder_id, array &$existing, $force_copy) {
+        global $wpdb;
+        $src_path = $this->get_file_path_on_disk($file);
+        if (!file_exists($src_path) || !is_readable($src_path)) {
+            return new WP_Error('source_missing', 'Source file is missing on disk');
+        }
+
+        self::ensure_upload_storage();
+        $target_dir = trailingslashit($this->get_storage_dir()) . (int) $target_folder_id;
+        if (!file_exists($target_dir)) {
+            wp_mkdir_p($target_dir);
+            $htaccess = $target_dir . '/.htaccess';
+            if (!file_exists($htaccess)) { @file_put_contents($htaccess, "Deny from all\n"); }
+            $index = $target_dir . '/index.php';
+            if (!file_exists($index)) { @file_put_contents($index, "<?php\n// Silence is golden.\n"); }
+        }
+
+        $stored = wp_unique_filename($target_dir, $file->stored_name);
+        $dest = trailingslashit($target_dir) . $stored;
+        if (!@copy($src_path, $dest)) {
+            return new WP_Error('copy_failed', 'Could not copy file on disk');
+        }
+
+        $original = Anchor_FM_Copy_Namer::resolve_unique($file->original_name, $existing, true, $force_copy);
+        $wpdb->insert(self::table('files'), [
+            'folder_id'        => (int) $target_folder_id,
+            'original_name'    => $original,
+            'stored_name'      => $stored,
+            'mime_type'        => $file->mime_type,
+            'size'             => (int) $file->size,
+            'sha1'             => $file->sha1,
+            'uploader_user_id' => get_current_user_id(),
+            'created_at'       => current_time('mysql'),
+        ], ['%d','%s','%s','%s','%d','%s','%d','%s']);
+        $existing[] = $original;
+        return (int) $wpdb->insert_id;
+    }
+
     private function require_nonce() {
         check_ajax_referer(self::NONCE_ACTION, 'nonce');
     }
