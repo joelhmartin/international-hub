@@ -1170,6 +1170,10 @@ class Anchor_Private_File_Manager {
             'uploader_user_id' => get_current_user_id(),
             'created_at'       => current_time('mysql'),
         ], ['%d','%s','%s','%s','%d','%s','%d','%s']);
+        if (!$wpdb->insert_id) {
+            @unlink($dest);
+            return new WP_Error('db_insert_failed', 'Could not save the copied file');
+        }
         $existing[] = $original;
         return (int) $wpdb->insert_id;
     }
