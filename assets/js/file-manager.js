@@ -1993,7 +1993,7 @@ jQuery(function ($) {
         dragFileId = id;
         dragFolderId = null;
         if (e.originalEvent && e.originalEvent.dataTransfer) {
-            e.originalEvent.dataTransfer.effectAllowed = 'move';
+            e.originalEvent.dataTransfer.effectAllowed = 'copyMove';
             e.originalEvent.dataTransfer.setData('text/plain', String(id));
         }
         $root.addClass('afm--dragMode');
@@ -2005,7 +2005,7 @@ jQuery(function ($) {
         dragFolderId = id;
         dragFileId = null;
         if (e.originalEvent && e.originalEvent.dataTransfer) {
-            e.originalEvent.dataTransfer.effectAllowed = 'move';
+            e.originalEvent.dataTransfer.effectAllowed = 'copyMove';
             e.originalEvent.dataTransfer.setData('text/plain', String(id));
         }
         $root.addClass('afm--dragMode');
@@ -2020,7 +2020,7 @@ jQuery(function ($) {
         else if (kind === 'folder') { dragFolderId = id; dragFileId = null; }
         else return;
         if (e.originalEvent && e.originalEvent.dataTransfer) {
-            e.originalEvent.dataTransfer.effectAllowed = 'move';
+            e.originalEvent.dataTransfer.effectAllowed = 'copyMove';
             e.originalEvent.dataTransfer.setData('text/plain', String(id));
         }
         $root.addClass('afm--dragMode');
@@ -2059,7 +2059,8 @@ jQuery(function ($) {
         e.preventDefault();
         const folderId = Number($(this).data('afm-folder-card') || $(this).data('afm-open-folder') || $(this).data('afm-row-id'));
         if (productDocsFolderId && folderId === productDocsFolderId) return;
-        handleDropOnFolder($(this), folderId);
+        const copyMode = !!(e.originalEvent && (e.originalEvent.ctrlKey || e.originalEvent.altKey));
+        handleDropOnFolder($(this), folderId, copyMode);
     });
 
     $(document).on('drop', function (e) {
@@ -2069,14 +2070,25 @@ jQuery(function ($) {
         const $target = $(el).closest('[data-afm-folder-card], [data-afm-open-folder], [data-afm-row-kind="folder"]');
         if ($target.length) {
             e.preventDefault();
-        const folderId = Number($target.data('afm-folder-card') || $target.data('afm-open-folder') || $target.data('afm-row-id'));
-        if (productDocsFolderId && folderId === productDocsFolderId) return;
-        handleDropOnFolder($target, folderId);
+            const folderId = Number($target.data('afm-folder-card') || $target.data('afm-open-folder') || $target.data('afm-row-id'));
+            if (productDocsFolderId && folderId === productDocsFolderId) return;
+            const copyMode = !!(e.originalEvent && (e.originalEvent.ctrlKey || e.originalEvent.altKey));
+            handleDropOnFolder($target, folderId, copyMode);
         }
     });
 
-    function handleDropOnFolder($el, folderId) {
+    function handleDropOnFolder($el, folderId, copyMode) {
         $el.removeClass('is-drop');
+        if (copyMode) {
+            const items = [];
+            if (dragFileId) { items.push({ kind: 'file', id: dragFileId }); }
+            else if (dragFolderId) {
+                if (folderId === dragFolderId) return;
+                items.push({ kind: 'folder', id: dragFolderId });
+            }
+            if (items.length) { flashDrop($el); copyItems(items, folderId); }
+            return;
+        }
         if (dragFileId) {
             api('anchor_fm_move_file', { file_id: dragFileId, folder_id: folderId }).done(res => {
                 if (res && res.success) {
