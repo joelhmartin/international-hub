@@ -124,5 +124,20 @@ $no_last = Anchor_FM_User_Import::validate(['first_name'=>'Jane','last_name'=>''
 check('missing last not ok', $no_last['ok'], false);
 check('missing last message', $no_last['error'], 'Missing last name');
 
+require __DIR__ . '/../includes/class-afm-copy-namer.php';
+
+// --- Anchor_FM_Copy_Namer::split_extension ---
+check('split pdf base', Anchor_FM_Copy_Namer::split_extension('report.pdf')[0], 'report');
+check('split pdf ext', Anchor_FM_Copy_Namer::split_extension('report.pdf')[1], '.pdf');
+check('split no ext folder', Anchor_FM_Copy_Namer::split_extension('My Folder')[1], '');
+check('split dotfile no ext', Anchor_FM_Copy_Namer::split_extension('.htaccess')[1], '');
+check('split double ext base', Anchor_FM_Copy_Namer::split_extension('archive.tar.gz')[0], 'archive.tar');
+check('split double ext ext', Anchor_FM_Copy_Namer::split_extension('archive.tar.gz')[1], '.gz');
+
+// --- Anchor_FM_Copy_Namer::add_copy_suffix ---
+check('suffix first', Anchor_FM_Copy_Namer::add_copy_suffix('Report'), 'Report (copy)');
+check('suffix second', Anchor_FM_Copy_Namer::add_copy_suffix('Report (copy)'), 'Report (copy 2)');
+check('suffix third', Anchor_FM_Copy_Namer::add_copy_suffix('Report (copy 2)'), 'Report (copy 3)');
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
