@@ -26,4 +26,34 @@ class Anchor_FM_Copy_Namer {
         }
         return $base . ' (copy)';
     }
+
+    /** Apply add_copy_suffix, preserving a file extension when $is_file. */
+    public static function next_copy_name($name, $is_file) {
+        if ($is_file) {
+            list($base, $ext) = self::split_extension($name);
+            return self::add_copy_suffix($base) . $ext;
+        }
+        return self::add_copy_suffix((string) $name);
+    }
+
+    /**
+     * Resolve a unique name against existing sibling names (case-insensitive).
+     * If $force_copy, always apply at least one "(copy)"; then bump until free.
+     */
+    public static function resolve_unique($desired, array $existing, $is_file, $force_copy) {
+        $taken = [];
+        foreach ($existing as $e) {
+            $taken[strtolower((string) $e)] = true;
+        }
+        $candidate = (string) $desired;
+        if ($force_copy) {
+            $candidate = self::next_copy_name($candidate, $is_file);
+        }
+        $i = 0;
+        while (isset($taken[strtolower($candidate)]) && $i < self::MAX_SUFFIX) {
+            $candidate = self::next_copy_name($candidate, $is_file);
+            $i++;
+        }
+        return $candidate;
+    }
 }

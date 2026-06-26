@@ -139,5 +139,16 @@ check('suffix first', Anchor_FM_Copy_Namer::add_copy_suffix('Report'), 'Report (
 check('suffix second', Anchor_FM_Copy_Namer::add_copy_suffix('Report (copy)'), 'Report (copy 2)');
 check('suffix third', Anchor_FM_Copy_Namer::add_copy_suffix('Report (copy 2)'), 'Report (copy 3)');
 
+// --- Anchor_FM_Copy_Namer::next_copy_name ---
+check('next file keeps ext', Anchor_FM_Copy_Namer::next_copy_name('report.pdf', true), 'report (copy).pdf');
+check('next folder no ext', Anchor_FM_Copy_Namer::next_copy_name('My Folder', false), 'My Folder (copy)');
+
+// --- Anchor_FM_Copy_Namer::resolve_unique ---
+check('resolve no collision unchanged', Anchor_FM_Copy_Namer::resolve_unique('report.pdf', ['other.pdf'], true, false), 'report.pdf');
+check('resolve forced duplicate', Anchor_FM_Copy_Namer::resolve_unique('report.pdf', [], true, true), 'report (copy).pdf');
+check('resolve collide bumps', Anchor_FM_Copy_Namer::resolve_unique('report.pdf', ['report (copy).pdf'], true, true), 'report (copy 2).pdf');
+check('resolve case-insensitive collision', Anchor_FM_Copy_Namer::resolve_unique('Report.PDF', ['report.pdf'], true, false), 'Report (copy).PDF');
+check('resolve folder forced', Anchor_FM_Copy_Namer::resolve_unique('Docs', ['Docs (copy)'], false, true), 'Docs (copy 2)');
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
