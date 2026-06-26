@@ -48,6 +48,7 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_stream', [$this, 'ajax_stream']);
         add_action('wp_ajax_anchor_fm_move_file', [$this, 'ajax_move_file']);
         add_action('wp_ajax_anchor_fm_move_folder', [$this, 'ajax_move_folder']);
+        add_action('wp_ajax_anchor_fm_copy_items', [$this, 'ajax_copy_items']);
         add_action('wp_ajax_anchor_fm_download_folder', [$this, 'ajax_download_folder']);
         add_action('wp_ajax_anchor_fm_create_link', [$this, 'ajax_create_link']);
         add_action('wp_ajax_anchor_fm_update_link', [$this, 'ajax_update_link']);
@@ -2348,6 +2349,89 @@ class Anchor_Private_File_Manager {
 
         $this->log_activity(get_current_user_id(), 'move_folder', 'folder', $folder_id, ['to' => $target_id]);
         $this->json_success(['moved' => true]);
+    }
+
+    public function ajax_copy_items() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $target = isset($_POST['target_folder_id']) ? (int) $_POST['target_folder_id'] : 0;
+        $raw = isset($_POST['items']) ? wp_unslash($_POST['items']) : '';
+        $items = json_decode((string) $raw, true);
+        if (!is_array($items) || !$items) $this->json_error('No items to copy');
+        if ($target <= 0) $this->json_error('Missing target folder');
+
+        if (!$this->get_folder_row($target)) $this->json_error('Target folder not found', 404);
+        if (!$this->can_user_upload_to_folder($user_id, $target)) $this->json_error('Forbidden', 403);
+
+        $existing = $this->gather_existing_names($target);
+        $results = [];
+        $copied = 0;
+        $errors = 0;
+
+        foreach ($items as $it) {
+            $kind = isset($it['kind']) ? sanitize_key((string) $it['kind']) : '';
+            $id = isset($it['id']) ? (int) $it['id'] : 0;
+            $res = ['kind' => $kind, 'sourceId' => $id, 'status' => 'error', 'message' => ''];
+
+            if ($id <= 0 || !in_array($kind, ['file', 'link', 'video', 'folder'], true)) {
+                $res['message'] = 'Invalid item';
+                $errors++; $results[] = $res; continue;
+            }
+
+            $new = null;
+            if ($kind === 'file') {
+                $row = $this->get_file_row($id);
+                if (!$row) { $res['message'] = 'Not found'; $errors++; $results[] = $res; continue; }
+                if (!$this->can_user_manage_file($user_id, $id)) { $res['message'] = 'Forbidden'; $errors++; $results[] = $res; continue; }
+                $new = $this->copy_file_row($row, $target, $existing, ((int) $row->folder_id === $target));
+            } elseif ($kind === 'link') {
+                $row = $this->get_link_row($id);
+                if (!$row) { $res['message'] = 'Not found'; $errors++; $results[] = $res; continue; }
+                if (!$this->can_user_manage_link($user_id, $id)) { $res['message'] = 'Forbidden'; $errors++; $results[] = $res; continue; }
+                $new = $this->copy_link_row($row, $target, $existing, ((int) $row->folder_id === $target));
+            } elseif ($kind === 'video') {
+                $row = $this->get_video_row($id);
+                if (!$row) { $res['message'] = 'Not found'; $errors++; $results[] = $res; continue; }
+                if (!$this->can_user_manage_video($user_id, $id)) { $res['message'] = 'Forbidden'; $errors++; $results[] = $res; continue; }
+                $new = $this->copy_video_row($row, $target, $existing, ((int) $row->folder_id === $target));
+            } else { // folder
+                if (!current_user_can('administrator')) { $res['message'] = 'Forbidden'; $errors++; $results[] = $res; continue; }
+                $row = $this->get_folder_row($id);
+                if (!$row) { $res['message'] = 'Not found'; $errors++; $results[] = $res; continue; }
+                if ($id === $target || $this->is_descendant($target, $id)) {
+                    $res['message'] = 'Cannot copy a folder into itself or its own subfolder';
+                    $errors++; $results[] = $res; continue;
+                }
+                if ($this->count_folder_tree($id) > self::COPY_MAX_NODES) {
+                    $res['message'] = 'Folder is too large to copy';
+                    $errors++; $results[] = $res; continue;
+                }
+                $new = $this->copy_folder_tree($row, $target, $existing, ((int) $row->parent_id === $target));
+            }
+
+            if (is_wp_error($new)) {
+                $res['message'] = $new->get_error_message();
+                $errors++; $results[] = $res; continue;
+            }
+            $res['status'] = 'copied';
+            $res['newId'] = (int) $new;
+            $copied++;
+            $results[] = $res;
+        }
+
+        $this->log_activity($user_id, 'copy_items', 'folder', $target, [
+            'copied' => $copied,
+            'errors' => $errors,
+            'count'  => count($items),
+        ]);
+        $this->json_success([
+            'copied'         => $copied,
+            'errors'         => $errors,
+            'items'          => $results,
+            'targetFolderId' => $target,
+        ]);
     }
 
     private function is_descendant($folder_id, $possible_ancestor_id) {
