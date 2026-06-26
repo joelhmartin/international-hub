@@ -284,6 +284,28 @@ jQuery(function ($) {
         }).always(function () { $root.removeClass('afm--busy'); });
     }
 
+    $(document).on('keydown', function (e) {
+        if (!AnchorFM.isAdmin) return;
+        if (!(e.ctrlKey || e.metaKey)) return;
+        // Don't hijack typing or shortcuts while a field/modal is focused.
+        const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) return;
+        if ($root.find('.afm__modal').is(':visible')) return;
+        if (!$root.is(':visible')) return;
+
+        const key = String(e.key || '').toLowerCase();
+        if (key === 'c') {
+            const items = selectionAsItems();
+            if (items.length) { e.preventDefault(); setClipboard(items); }
+        } else if (key === 'v') {
+            const items = clipboardItems();
+            if (items.length && state.currentFolderId > 0) { e.preventDefault(); copyItems(items, state.currentFolderId); }
+        } else if (key === 'd') {
+            const items = selectionAsItems();
+            if (items.length && state.currentFolderId > 0) { e.preventDefault(); copyItems(items, state.currentFolderId); }
+        }
+    });
+
     function rowIcon(item) {
         if (item.kind === 'folder') return 'category';
         if (item.kind === 'link') return 'admin-links';
