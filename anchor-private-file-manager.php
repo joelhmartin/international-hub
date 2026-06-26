@@ -16,6 +16,8 @@ class Anchor_Private_File_Manager {
 
     const VERSION = '2.9.17';
     const NONCE_ACTION = 'anchor_fm_nonce';
+    const COPY_MAX_NODES = 2000;
+    const COPY_MAX_DEPTH = 50;
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
     const META_PRODUCT_DOCS = '_anchor_pd_docs';
@@ -1169,6 +1171,62 @@ class Anchor_Private_File_Manager {
         ], ['%d','%s','%s','%s','%d','%s','%d','%s']);
         $existing[] = $original;
         return (int) $wpdb->insert_id;
+    }
+
+    /** Count nodes (folder+files+links+videos) in a subtree; short-circuits past the cap. */
+    private function count_folder_tree($folder_id, $depth = 0) {
+        if ($depth > self::COPY_MAX_DEPTH) { return PHP_INT_MAX; }
+        global $wpdb;
+        $folder_id = (int) $folder_id;
+        $count = 1; // this folder
+        $count += (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(1) FROM " . self::table('files') . " WHERE folder_id = %d", $folder_id));
+        $count += (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(1) FROM " . self::table('links') . " WHERE folder_id = %d", $folder_id));
+        $count += (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(1) FROM " . self::table('videos') . " WHERE folder_id = %d", $folder_id));
+        $children = $wpdb->get_col($wpdb->prepare("SELECT id FROM " . self::table('folders') . " WHERE parent_id = %d", $folder_id));
+        foreach ((array) $children as $cid) {
+            $count += $this->count_folder_tree((int) $cid, $depth + 1);
+            if ($count > self::COPY_MAX_NODES) { return $count; }
+        }
+        return $count;
+    }
+
+    /** Recursively copy a folder into $target_parent_id. Returns new folder id or WP_Error. */
+    private function copy_folder_tree($folder, $target_parent_id, array &$existing, $force_copy, $depth = 0) {
+        if ($depth > self::COPY_MAX_DEPTH) { return new WP_Error('too_deep', 'Folder nesting too deep to copy'); }
+        global $wpdb;
+
+        $name = Anchor_FM_Copy_Namer::resolve_unique($folder->name, $existing, false, $force_copy);
+        $now = current_time('mysql');
+        $wpdb->insert(self::table('folders'), [
+            'parent_id'     => (int) $target_parent_id,
+            'name'          => $name,
+            'owner_user_id' => 0,
+            'is_private'    => 0,
+            'created_by'    => get_current_user_id(),
+            'created_at'    => $now,
+            'updated_at'    => $now,
+        ], ['%d','%s','%d','%d','%d','%s','%s']);
+        $new_id = (int) $wpdb->insert_id;
+        $existing[] = $name;
+
+        // The new folder starts empty, so children never need forcing; track their
+        // chosen names so two children with the same name don't collide.
+        $child_existing = [];
+        $src_id = (int) $folder->id;
+
+        foreach ((array) $wpdb->get_results($wpdb->prepare("SELECT * FROM " . self::table('folders') . " WHERE parent_id = %d", $src_id)) as $sf) {
+            $this->copy_folder_tree($sf, $new_id, $child_existing, false, $depth + 1);
+        }
+        foreach ((array) $wpdb->get_results($wpdb->prepare("SELECT * FROM " . self::table('files') . " WHERE folder_id = %d", $src_id)) as $f) {
+            $this->copy_file_row($f, $new_id, $child_existing, false);
+        }
+        foreach ((array) $wpdb->get_results($wpdb->prepare("SELECT * FROM " . self::table('links') . " WHERE folder_id = %d", $src_id)) as $l) {
+            $this->copy_link_row($l, $new_id, $child_existing, false);
+        }
+        foreach ((array) $wpdb->get_results($wpdb->prepare("SELECT * FROM " . self::table('videos') . " WHERE folder_id = %d", $src_id)) as $v) {
+            $this->copy_video_row($v, $new_id, $child_existing, false);
+        }
+        return $new_id;
     }
 
     private function require_nonce() {
