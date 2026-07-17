@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.17
+ * Version: 2.9.18
  * Author: Anchor Corps
  */
 
@@ -14,7 +14,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.9.17';
+    const VERSION = '2.9.18';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -1828,6 +1828,49 @@ class Anchor_Private_File_Manager {
         return ['ok' => true, 'message' => 'Deleted'];
     }
 
+    /**
+     * Extensions accepted by the uploaders. Anything outside this list is
+     * rejected before the file is written, preventing executable payloads
+     * (e.g. .php, .phtml) from landing in the web-served uploads directory.
+     * Filterable so a site can extend it without touching the plugin.
+     */
+    private static function allowed_upload_extensions() {
+        $exts = [
+            // documents
+            'pdf','doc','docx','xls','xlsx','ppt','pptx','txt','csv','rtf',
+            'odt','ods','odp',
+            // images
+            'jpg','jpeg','png','gif','webp','bmp','tif','tiff','heic',
+            // audio / video
+            'mp4','mov','m4v','webm','mp3','wav','m4a',
+            // archives
+            'zip',
+        ];
+        $exts = apply_filters('anchor_fm_allowed_upload_extensions', $exts);
+        return array_map('strtolower', (array) $exts);
+    }
+
+    /**
+     * Validate an uploaded file against the extension allow-list. Returns the
+     * resolved ['ext' => ..., 'type' => ...] on success, or false when the
+     * type is disallowed. The real (content-sniffed) extension from
+     * wp_check_filetype_and_ext() is preferred; when that can't determine a
+     * type we fall back to the sanitized filename's extension so the
+     * allow-list is still enforced (and disallowed types are rejected).
+     */
+    private function validate_upload_type($tmp, $filename) {
+        $ft   = wp_check_filetype_and_ext($tmp, $filename);
+        $ext  = !empty($ft['ext'])  ? strtolower($ft['ext'])  : '';
+        $type = !empty($ft['type']) ? $ft['type'] : '';
+        if ($ext === '') {
+            $ext = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+        }
+        if ($ext === '' || !in_array($ext, self::allowed_upload_extensions(), true)) {
+            return false;
+        }
+        return ['ext' => $ext, 'type' => $type !== '' ? $type : 'application/octet-stream'];
+    }
+
     public function ajax_upload() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -1857,6 +1900,7 @@ class Anchor_Private_File_Manager {
         $files_table = self::table('files');
 
         $uploaded = [];
+        $rejected = [];
         $names = (array) $_FILES['files']['name'];
         $tmp_names = (array) $_FILES['files']['tmp_name'];
         $sizes = (array) $_FILES['files']['size'];
@@ -1873,8 +1917,12 @@ class Anchor_Private_File_Manager {
             $sanitized = sanitize_file_name($original);
             $unique = wp_unique_filename($folder_dir, $sanitized);
 
-            $ft = wp_check_filetype_and_ext($tmp, $unique);
-            $mime = !empty($ft['type']) ? $ft['type'] : 'application/octet-stream';
+            $valid = $this->validate_upload_type($tmp, $unique);
+            if ($valid === false) {
+                $rejected[] = $original;
+                continue;
+            }
+            $mime = $valid['type'];
 
             $dest = trailingslashit($folder_dir) . $unique;
             if (!@move_uploaded_file($tmp, $dest)) {
@@ -1907,7 +1955,7 @@ class Anchor_Private_File_Manager {
             if ($row) $this->notify_upload($row, $user_id);
         }
 
-        $this->json_success(['uploaded' => $uploaded]);
+        $this->json_success(['uploaded' => $uploaded, 'rejected' => $rejected]);
     }
 
     public function ajax_delete_file() {
@@ -3270,6 +3318,14 @@ class Anchor_Private_File_Manager {
         $folder_dir = trailingslashit($this->get_storage_dir()) . $folder_id;
         if (!file_exists($folder_dir)) {
             wp_mkdir_p($folder_dir);
+            $htaccess = $folder_dir . '/.htaccess';
+            if (!file_exists($htaccess)) {
+                @file_put_contents($htaccess, "Deny from all\n");
+            }
+            $index = $folder_dir . '/index.php';
+            if (!file_exists($index)) {
+                @file_put_contents($index, "<?php\n// Silence is golden.\n");
+            }
         }
 
         $file = $_FILES['file'];
@@ -3282,8 +3338,11 @@ class Anchor_Private_File_Manager {
 
         $sanitized = sanitize_file_name($original);
         $unique = wp_unique_filename($folder_dir, $sanitized);
-        $ft = wp_check_filetype_and_ext($tmp, $unique);
-        $mime = !empty($ft['type']) ? $ft['type'] : 'application/octet-stream';
+        $valid = $this->validate_upload_type($tmp, $unique);
+        if ($valid === false) {
+            $this->json_error('File type not allowed', 415);
+        }
+        $mime = $valid['type'];
         $dest = trailingslashit($folder_dir) . $unique;
 
         if (!@move_uploaded_file($tmp, $dest)) {

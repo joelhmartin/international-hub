@@ -623,7 +623,11 @@ jQuery(function ($) {
                 return xhr;
             },
         }).always(() => $root.removeClass('afm--busy'))
-            .done(() => {
+            .done((res) => {
+                const rejected = res && res.data && res.data.rejected;
+                if (rejected && rejected.length) {
+                    toast('Some files were blocked (type not allowed): ' + rejected.join(', '));
+                }
                 loadFolder(state.currentFolderId);
                 $root.find('[data-afm-upload-progress]').remove();
             })
