@@ -7,7 +7,6 @@ jQuery(function ($) {
     const $title = $root.find('[data-apfm-title], [data-aap-title]');
     const $searchWrap = $root.find('[data-apfm-search]');
     const $uploadWrap = $root.find('[data-apfm-upload]');
-    const $refreshBtn = $root.find('[data-apfm-action="refresh"]');
     const $tree = $root.find('[data-afm-tree]');
     const $filesOnly = $root.find('[data-apfm-files-only]');
     const $breadcrumbs = $root.find('[data-afm-breadcrumbs]');
@@ -72,10 +71,6 @@ jQuery(function ($) {
         const isFiles = state.tab === 'files';
         $searchWrap.prop('hidden', !isFiles);
         $uploadWrap.prop('hidden', !isFiles);
-        // Refresh reloads whatever view you're on, so it stays put on every
-        // tab. (It used to hide itself inside a folder, which took it away
-        // exactly where a stale listing is most likely.)
-        $refreshBtn.prop('hidden', false);
         $tree.prop('hidden', !isFiles);
         $filesOnly.prop('hidden', !isFiles);
         $breadcrumbs.toggle(isFiles);
@@ -254,22 +249,6 @@ jQuery(function ($) {
     // Events
     $root.on('click', '[data-apfm-tab]', function () {
         switchTab(String($(this).data('apfm-tab')));
-    });
-
-    $root.on('click', '[data-apfm-action="refresh"]', function () {
-        if (state.tab === 'files') {
-            $root.trigger('anchorfm:refresh');
-        } else if (state.tab === 'orders') {
-            loadOrders();
-        } else if (state.tab === 'downloads') {
-            loadDownloads();
-        } else if (state.tab === 'account') {
-            resetProfileForm();
-        } else if (state.tab === 'security') {
-            $passwordForm.trigger('reset');
-            $passwordNotice.prop('hidden', true);
-            $resetNotice.prop('hidden', true);
-        }
     });
 
     $root.on('click', '[data-aap-order]', function () {

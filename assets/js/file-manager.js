@@ -97,6 +97,17 @@ jQuery(function ($) {
         return Math.min(max, Math.max(min, num));
     }
 
+    /**
+     * Uploading is administrator-only on the server — can_user_upload_to_folder()
+     * is a plain administrator check and ignores the folder entirely. Folder
+     * capability alone is not enough (a non-admin folder owner resolves to
+     * 'manage'), so every upload affordance goes through here to stay honest
+     * about what the server will actually accept.
+     */
+    function canUploadHere() {
+        return !!AnchorFM.isAdmin && capRank(state.currentCapability) >= 2;
+    }
+
     function capRank(cap) {
         switch (cap) {
             case 'manage': return 3;
@@ -409,7 +420,11 @@ jQuery(function ($) {
         state.currentCapability = capability || state.currentCapability;
 
         // Capability gating for the toolbar controls (restored from the old card grid).
-        const canManage = capRank(state.currentCapability) >= 3;
+        // Every write endpoint behind these controls is administrator-only on
+        // the server, so the role check has to lead — a non-admin folder owner
+        // resolves to 'manage' here and would otherwise be shown controls that
+        // 403 on every click.
+        const canManage = AnchorFM.isAdmin && capRank(state.currentCapability) >= 3;
         const canUpload = canManage && state.currentFolderId > 0;
         const canAddLink = canManage && state.currentFolderId > 0;
         $root.toggleClass('afm--canCreateFolder', canManage);
@@ -631,8 +646,7 @@ jQuery(function ($) {
 
     function uploadFiles(files) {
         if (!files || !files.length) return;
-        const canUpload = capRank(state.currentCapability) >= 2;
-        if (!canUpload) return;
+        if (!canUploadHere()) return;
 
         const data = new FormData();
         data.append('action', 'anchor_fm_upload');
@@ -1579,7 +1593,7 @@ jQuery(function ($) {
         e.preventDefault();
         e.stopPropagation();
         if (ignoreIfNotFilesTab(e)) return;
-        if (capRank(state.currentCapability) < 2) return;
+        if (!canUploadHere()) return;
         dragDepth++;
         $root.addClass('afm--drag');
     });
@@ -1587,14 +1601,14 @@ jQuery(function ($) {
         e.preventDefault();
         e.stopPropagation();
         if (ignoreIfNotFilesTab(e)) return;
-        if (capRank(state.currentCapability) < 2) return;
+        if (!canUploadHere()) return;
         $root.addClass('afm--drag');
     });
     $content.on('dragleave', function (e) {
         e.preventDefault();
         e.stopPropagation();
         if (ignoreIfNotFilesTab(e)) return;
-        if (capRank(state.currentCapability) < 2) return;
+        if (!canUploadHere()) return;
         dragDepth = Math.max(0, dragDepth - 1);
         if (!dragDepth) $root.removeClass('afm--drag');
     });
@@ -1604,7 +1618,7 @@ jQuery(function ($) {
         if (ignoreIfNotFilesTab(e)) return;
         dragDepth = 0;
         $root.removeClass('afm--drag');
-        if (capRank(state.currentCapability) < 2) return;
+        if (!canUploadHere()) return;
         if (e.originalEvent && e.originalEvent.dataTransfer) {
             uploadFiles(e.originalEvent.dataTransfer.files);
         }
@@ -2517,10 +2531,6 @@ jQuery(function ($) {
             loadProducts();
             loadMyProductDocs();
         });
-    });
-
-    $root.on('anchorfm:refresh', function () {
-        loadFolder(state.currentFolderId);
     });
 
     $root.on('anchorfm:showProductDocs', function () {

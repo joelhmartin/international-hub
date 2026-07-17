@@ -642,23 +642,20 @@ class Anchor_Private_File_Manager {
                 <main class="afm__main" aria-label="<?php esc_attr_e('Account content', 'anchor-private-file-manager'); ?>">
                     <?php
                     /*
-                     * Utility bar: low-key admin actions kept out of the way of
-                     * the everyday header below. Collapses to nothing (see
-                     * .afm__utilityBar:has() in the CSS) when the current user
-                     * and tab leave it with no visible children, so a
-                     * view-only user never sees an empty strip.
+                     * Utility bar: admin-only actions, kept out of the way of the
+                     * everyday header below. Every action here — including
+                     * Upload — is administrator-gated server-side
+                     * (can_user_upload_to_folder() is an administrator check),
+                     * so no other role has anything to put in this bar and it
+                     * is not rendered for them at all.
                      *
-                     * Upload is deliberately NOT inside the administrator
-                     * check: it is gated per-folder by capability, so a
-                     * non-admin with manage rights can still upload.
+                     * The :has() rule in the CSS additionally collapses it on
+                     * tabs where its files-only children are hidden, so an
+                     * admin on the Account tab gets no empty strip.
                      */
                     ?>
+                    <?php if (current_user_can('administrator')) : ?>
                     <div class="afm__utilityBar" data-afm-utility-bar>
-                        <button type="button" class="afm__utilityLink" data-apfm-action="refresh">
-                            <span class="dashicons dashicons-update" aria-hidden="true"></span>
-                            <?php esc_html_e('Refresh', 'anchor-private-file-manager'); ?>
-                        </button>
-                        <?php if (current_user_can('administrator')) : ?>
                         <button type="button" class="afm__utilityLink" data-afm-action="new-folder" data-apfm-files-only>
                             <span class="dashicons dashicons-plus" aria-hidden="true"></span>
                             <?php esc_html_e('New folder', 'anchor-private-file-manager'); ?>
@@ -671,7 +668,6 @@ class Anchor_Private_File_Manager {
                             <span class="dashicons dashicons-video-alt3" aria-hidden="true"></span>
                             <?php esc_html_e('New video', 'anchor-private-file-manager'); ?>
                         </button>
-                        <?php endif; ?>
                         <div class="afm__upload" data-apfm-upload hidden>
                             <input type="file" multiple class="afm__fileInput" data-afm-file-input>
                             <button type="button" class="afm__btn afm__btn--primary" data-afm-action="upload">
@@ -680,6 +676,7 @@ class Anchor_Private_File_Manager {
                             </button>
                         </div>
                     </div>
+                    <?php endif; ?>
                     <header class="afm__toolbar">
                         <div class="afm__breadcrumbs">
                             <span class="aap__title" data-apfm-title><?php esc_html_e('Documents', 'anchor-private-file-manager'); ?></span>
