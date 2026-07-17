@@ -70,10 +70,12 @@ jQuery(function ($) {
 
     function updateToolbar() {
         const isFiles = state.tab === 'files';
-        const hasFolder = isFiles && state.currentFolderId > 0;
         $searchWrap.prop('hidden', !isFiles);
         $uploadWrap.prop('hidden', !isFiles);
-        $refreshBtn.prop('hidden', isFiles && hasFolder ? true : false);
+        // Refresh reloads whatever view you're on, so it stays put on every
+        // tab. (It used to hide itself inside a folder, which took it away
+        // exactly where a stale listing is most likely.)
+        $refreshBtn.prop('hidden', false);
         $tree.prop('hidden', !isFiles);
         $filesOnly.prop('hidden', !isFiles);
         $breadcrumbs.toggle(isFiles);

@@ -313,10 +313,25 @@ jQuery(function ($) {
         return iconForMime(item.mime);
     }
 
+    /**
+     * Row glyph. Videos show their Vimeo thumbnail when we have one; anything
+     * else (and any thumbnail that fails to load — these URLs are Vimeo's CDN
+     * and do expire) falls back to the dashicon via the inline onerror.
+     */
+    function rowIconHtml(item) {
+        if (item.kind === 'video' && item.thumbnailUrl) {
+            return `<span class="afm__rowIcon afm__rowIcon--thumb">
+                <img src="${esc(item.thumbnailUrl)}" alt="" loading="lazy"
+                     onerror="this.parentNode.classList.remove('afm__rowIcon--thumb');this.parentNode.classList.add('dashicons','dashicons-video-alt3');this.remove();">
+            </span>`;
+        }
+        return `<span class="afm__rowIcon dashicons dashicons-${rowIcon(item)}"></span>`;
+    }
+
     function currentRows(list) {
         const rows = [];
         (list.folders || []).forEach(f => rows.push({ kind: 'folder', id: f.id, name: f.name, isPrivate: f.isPrivate }));
-        (list.videos || []).forEach(v => rows.push({ kind: 'video', id: v.id, name: v.title, vimeoId: v.vimeoId, createdAt: v.createdAt }));
+        (list.videos || []).forEach(v => rows.push({ kind: 'video', id: v.id, name: v.title, vimeoId: v.vimeoId, vimeoHash: v.vimeoHash, thumbnailUrl: v.thumbnailUrl, createdAt: v.createdAt }));
         (list.links || []).forEach(l => rows.push({ kind: 'link', id: l.id, name: l.title, url: l.url, createdAt: l.createdAt }));
         (list.files || []).forEach(f => rows.push({ kind: 'file', id: f.id, name: f.name, mime: f.mime, size: f.size, createdAt: f.createdAt }));
         return rows;
@@ -357,7 +372,7 @@ jQuery(function ($) {
                  style="--afm-row-pad:${pad}px" tabindex="-1">
                 <div class="afm__rowCell afm__rowName">
                     ${disclosure}
-                    <span class="afm__rowIcon dashicons dashicons-${rowIcon(item)}"></span>
+                    ${rowIconHtml(item)}
                     <span class="afm__rowLabel" data-afm-row-label>${esc(item.name)}</span>
                 </div>
                 <div class="afm__rowCell afm__rowKind">${esc(kindLabel(item.kind, item.mime))}</div>
@@ -455,6 +470,29 @@ jQuery(function ($) {
         $modalPrimary.text(label || 'Save');
         state.modalMode = mode || '';
         state.modalPayload = payload || null;
+    }
+
+    function setModalBusy(busy, label) {
+        $modalPrimary.prop('disabled', !!busy);
+        if (label) $modalPrimary.text(label);
+    }
+
+    function videoNotice(msg) {
+        $modalBody.find('[data-afm-video-notice]').prop('hidden', false).text(msg);
+    }
+
+    /**
+     * Pull the server's message out of a wp_send_json_error response.
+     *
+     * wp_send_json_error(..., 400) makes jQuery *reject* the deferred, so the
+     * body arrives on jqXHR.responseJSON in a .fail() handler — never as the
+     * argument to .done(). Reading only the success path is why a real
+     * diagnosis used to surface as a bare console 400.
+     */
+    function errMessage(jqXHR, res, fallback) {
+        const fromXHR = jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message;
+        const fromRes = res && res.data && res.data.message;
+        return fromXHR || fromRes || fallback;
     }
 
     function openTextModal(opts) {
@@ -749,34 +787,42 @@ jQuery(function ($) {
 
     function openVideoViewer(videoId) {
         const v = findRow('video', videoId);
-        if (v && v.vimeoId) { renderVideoViewer(videoId, v.name, v.vimeoId); return; }
+        if (v && v.vimeoId) { renderVideoViewer(videoId, v.name, v.vimeoId, v.vimeoHash); return; }
         // Not in the current/expanded/search cache (e.g. opened from a deep link) —
-        // resolve it by id. The endpoint enforces view permission, so a forbidden
-        // or missing video falls through to the access-denied modal.
-        api('anchor_fm_vimeo_get', { video_id: videoId }).then(res => {
-            if (res && res.success && res.data.video && res.data.video.vimeoId) {
-                const vid = res.data.video;
-                renderVideoViewer(videoId, vid.title, vid.vimeoId);
-            } else if (typeof showAccessDenied === 'function') {
-                showAccessDenied('video', videoId, '');
-            }
-        });
+        // resolve it by id. The endpoint enforces view permission and answers a
+        // forbidden/missing video with a 4xx, which rejects the deferred — so
+        // access-denied has to be handled in .fail(), not .done().
+        const denied = () => { if (typeof showAccessDenied === 'function') showAccessDenied('video', videoId, ''); };
+        api('anchor_fm_vimeo_get', { video_id: videoId })
+            .done(res => {
+                if (res && res.success && res.data.video && res.data.video.vimeoId) {
+                    const vid = res.data.video;
+                    renderVideoViewer(videoId, vid.title, vid.vimeoId, vid.vimeoHash);
+                } else {
+                    denied();
+                }
+            })
+            .fail(denied);
     }
 
-    function renderVideoViewer(videoId, name, vimeoId) {
+    function renderVideoViewer(videoId, name, vimeoId, vimeoHash) {
         const playerId = 'afmVPlayer_' + videoId;
         let body = `<div class="afm__vplayer"><div id="${playerId}" class="afm__vplayerFrame" data-afm-video-frame></div></div>`;
         if (AnchorFM.isAdmin) {
             body += `<div class="afm__vhistory" data-afm-video-history><div class="afm__sectionTitle">Watch history</div><div class="afm__vhistoryBody">Loading…</div></div>`;
         }
         openViewerModal(esc(name), body, '');
-        mountVimeoPlayer(playerId, vimeoId, videoId);
+        mountVimeoPlayer(playerId, vimeoId, videoId, vimeoHash);
         if (AnchorFM.isAdmin) loadVideoHistory(videoId);
     }
 
-    function mountVimeoPlayer(elId, vimeoId, videoId) {
+    function mountVimeoPlayer(elId, vimeoId, videoId, vimeoHash) {
         if (!window.Vimeo || !window.Vimeo.Player) return;
-        activePlayer = new window.Vimeo.Player(elId, { id: Number(vimeoId), responsive: true });
+        const opts = { id: Number(vimeoId), responsive: true };
+        // Unlisted videos need their privacy hash to embed; without it the
+        // player only works where the domain is whitelisted on Vimeo.
+        if (vimeoHash) opts.h = String(vimeoHash);
+        activePlayer = new window.Vimeo.Player(elId, opts);
         startVideoTracking(activePlayer, videoId);
     }
 
@@ -1019,17 +1065,64 @@ jQuery(function ($) {
             });
             return;
         }
+        // Step 1 -> 2: ask the server to read the pasted refs and fetch titles.
+        if (state.modalMode === 'resolve-video') {
+            const src = String($modalBody.find('[data-afm-video-src]').val() || '').trim();
+            if (!src) {
+                videoNotice('Paste at least one Vimeo link or ID');
+                return;
+            }
+            setModalBusy(true, 'Fetching…');
+            api('anchor_fm_vimeo_resolve', { folder_id: state.currentFolderId, refs: src })
+                .done(res => {
+                    setModalBusy(false, 'Fetch');
+                    if (!res || !res.success) { videoNotice(errMessage(null, res, 'Could not read those videos')); return; }
+                    renderVideoReview((res.data && res.data.entries) || []);
+                })
+                .fail(jqXHR => {
+                    setModalBusy(false, 'Fetch');
+                    videoNotice(errMessage(jqXHR, null, 'Could not read those videos'));
+                });
+            return;
+        }
         if (state.modalMode === 'new-video') {
-            const title = $modalBody.find('[data-afm-video-title]').val();
-            const src = $modalBody.find('[data-afm-video-src]').val();
-            api('anchor_fm_vimeo_add', { folder_id: state.currentFolderId, title: title, vimeo: src }).then(res => {
-                if (!res || !res.success) {
-                    $modalBody.find('[data-afm-video-notice]').prop('hidden', false).text((res && res.data && res.data.message) || 'Could not add video');
-                    return;
-                }
-                closeModal();
-                reloadCurrentFolder();
+            // Titles are read live from the review rows so edits are honored.
+            const entries = (state.modalPayload && state.modalPayload.entries) || [];
+            const videos = [];
+            $modalBody.find('[data-afm-review-row]').each(function () {
+                const i = Number($(this).data('afm-review-index'));
+                const entry = entries[i];
+                if (!entry) return;
+                videos.push({
+                    vimeo: entry.vimeoId,
+                    hash: entry.hash || '',
+                    title: String($(this).find('[data-afm-review-title]').val() || '').trim(),
+                    thumbnailUrl: entry.thumbnailUrl || '',
+                });
             });
+            if (!videos.length) return;
+
+            setModalBusy(true, 'Adding…');
+            api('anchor_fm_vimeo_add', { folder_id: state.currentFolderId, videos: videos })
+                .done(res => {
+                    setModalBusy(false, 'Add');
+                    if (!res || !res.success) { videoNotice(errMessage(null, res, 'Could not add video')); return; }
+                    const added = (res.data && res.data.added) || [];
+                    const failed = (res.data && res.data.failed) || [];
+                    closeModal();
+                    reloadCurrentFolder();
+                    if (failed.length) {
+                        // Partial import: say what landed and what didn't
+                        // rather than implying everything worked.
+                        toast(`Added ${added.length}; ${failed.length} skipped — ${failed[0].message}`);
+                    } else if (added.length > 1) {
+                        toast(`Added ${added.length} videos`);
+                    }
+                })
+                .fail(jqXHR => {
+                    setModalBusy(false, 'Add');
+                    videoNotice(errMessage(jqXHR, null, 'Could not add video'));
+                });
             return;
         }
         if (state.modalMode === 'noop-close') {
@@ -1555,7 +1648,7 @@ jQuery(function ($) {
         }
         let html = headerHtml() + '<div class="afm__list afm__list--search" tabindex="0">';
         results.forEach(r => {
-            const item = { kind: r.kind, id: r.id, name: r.name, mime: r.mime, size: r.size, url: r.url, vimeoId: r.vimeoId, createdAt: '' };
+            const item = { kind: r.kind, id: r.id, name: r.name, mime: r.mime, size: r.size, url: r.url, vimeoId: r.vimeoId, vimeoHash: r.vimeoHash, thumbnailUrl: r.thumbnailUrl, createdAt: '' };
             // append the enclosing-folder path under the row
             const base = rowHtml(item, 0);
             html += base.replace('</div>\n            </div>', `</div><div class="afm__rowPath">${esc(r.path || 'Home')}</div>\n            </div>`);
@@ -1600,19 +1693,70 @@ jQuery(function ($) {
         openVideoModal();
     });
 
+    // Step 1: paste one or many Vimeo refs. Titles come from Vimeo, so no
+    // title field here — that's what the review step is for.
     function openVideoModal() {
         const body = `
-            <div class="afm__formRow"><label class="afm__label">Title</label>
-                <input type="text" class="afm__input" data-afm-video-title placeholder="Video title"></div>
-            <div class="afm__formRow"><label class="afm__label">Vimeo URL or ID</label>
-                <input type="text" class="afm__input" data-afm-video-src placeholder="https://vimeo.com/123456789"></div>
+            <div class="afm__formRow">
+                <label class="afm__label">Vimeo links or IDs</label>
+                <textarea class="afm__input afm__textarea" rows="4" data-afm-video-src
+                    placeholder="https://vimeo.com/123456789, https://vimeo.com/987654321"></textarea>
+                <div class="afm__hint">Separate multiple videos with commas or new lines. Titles are pulled from Vimeo — you can edit them next.</div>
+            </div>
             <div class="afm__notice" data-afm-video-notice hidden></div>`;
         $modalTitle.text('New video');
         $modalBody.html(body);
         $modalPrimary.show();
-        setModalPrimary('Add', 'new-video', null);
+        setModalPrimary('Fetch', 'resolve-video', null);
         openModal();
-        window.setTimeout(() => $modalBody.find('[data-afm-video-title]').trigger('focus'), 0);
+        window.setTimeout(() => $modalBody.find('[data-afm-video-src]').trigger('focus'), 0);
+    }
+
+    // Step 2: one row per resolved video — thumbnail, editable title (defaulted
+    // to Vimeo's), and an inline reason for anything that can't be imported.
+    function renderVideoReview(entries) {
+        const importable = entries.filter(e => e.vimeoId && !e.error);
+        const broken = entries.filter(e => !e.vimeoId || e.error);
+
+        const rows = importable.map((e, i) => `
+            <div class="afm__videoReviewRow" data-afm-review-row data-afm-review-index="${i}">
+                <div class="afm__videoReviewThumb">
+                    ${e.thumbnailUrl
+                        ? `<img src="${esc(e.thumbnailUrl)}" alt="" loading="lazy">`
+                        : `<span class="dashicons dashicons-video-alt3" aria-hidden="true"></span>`}
+                </div>
+                <div class="afm__videoReviewMain">
+                    <input type="text" class="afm__input" data-afm-review-title value="${esc(e.title)}" aria-label="Video title">
+                    <div class="afm__videoReviewMeta">
+                        Vimeo ID ${esc(e.vimeoId)}${e.hash ? ' · unlisted' : ''}
+                        ${e.warning ? `<span class="afm__videoReviewWarn">${esc(e.warning)} — title needs a hand</span>` : ''}
+                    </div>
+                </div>
+            </div>`).join('');
+
+        const brokenRows = broken.length ? `
+            <div class="afm__videoReviewBroken">
+                <div class="afm__label">Skipped (${broken.length})</div>
+                ${broken.map(e => `<div class="afm__videoReviewMeta">${esc(e.input)} — ${esc(e.error || 'unreadable')}</div>`).join('')}
+            </div>` : '';
+
+        const body = `
+            ${importable.length ? `<div class="afm__videoReview">${rows}</div>` : ''}
+            ${brokenRows}
+            <div class="afm__notice" data-afm-video-notice hidden></div>`;
+
+        $modalTitle.text(importable.length === 1 ? 'Add video' : `Add ${importable.length} videos`);
+        $modalBody.html(body);
+
+        if (!importable.length) {
+            // Nothing to add — a working Close beats a dead Add button.
+            $modalPrimary.show();
+            setModalPrimary('Close', 'noop-close', null);
+            return;
+        }
+        $modalPrimary.show();
+        setModalPrimary(importable.length === 1 ? 'Add' : `Add ${importable.length}`, 'new-video', { entries: importable });
+        window.setTimeout(() => $modalBody.find('[data-afm-review-title]').first().trigger('focus').trigger('select'), 0);
     }
 
     $root.on('click', '[data-afm-folder-menu]', function () {

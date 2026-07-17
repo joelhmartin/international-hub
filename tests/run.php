@@ -1,6 +1,29 @@
 <?php
 // Plain-PHP test runner for pure helpers. Run: php tests/run.php
 error_reporting(E_ALL);
+
+/*
+ * Minimal stubs for the handful of WordPress functions Anchor_FM_Vimeo touches,
+ * so fetch_meta()'s response handling is testable without a WP bootstrap.
+ * $GLOBALS['afm_http_stub'] is the canned response for the next wp_remote_get.
+ */
+if (!class_exists('WP_Error')) {
+    class WP_Error {
+        public $code; public $message;
+        public function __construct($code = '', $message = '') { $this->code = $code; $this->message = $message; }
+        public function get_error_code() { return $this->code; }
+        public function get_error_message() { return $this->message; }
+    }
+}
+function is_wp_error($thing) { return $thing instanceof WP_Error; }
+function wp_remote_get($url, $args = []) {
+    $GLOBALS['afm_http_last_url'] = $url;
+    $stub = isset($GLOBALS['afm_http_stub']) ? $GLOBALS['afm_http_stub'] : null;
+    return $stub === null ? new WP_Error('http_request_failed', 'No stub set') : $stub;
+}
+function wp_remote_retrieve_response_code($res) { return isset($res['response']['code']) ? $res['response']['code'] : 0; }
+function wp_remote_retrieve_body($res) { return isset($res['body']) ? $res['body'] : ''; }
+
 require __DIR__ . '/../includes/class-afm-vimeo.php';
 
 $failures = 0;
@@ -25,6 +48,75 @@ check('trailing slash', Anchor_FM_Vimeo::parse_id('https://vimeo.com/123456789/'
 check('private id with hash path', Anchor_FM_Vimeo::parse_id('https://vimeo.com/123456789/abcdef0123'), '123456789');
 check('garbage returns empty', Anchor_FM_Vimeo::parse_id('not a video'), '');
 check('empty returns empty', Anchor_FM_Vimeo::parse_id(''), '');
+
+// URL forms that previously 400'd because parse_id could not read them.
+check('manage/videos dashboard url', Anchor_FM_Vimeo::parse_id('https://vimeo.com/manage/videos/123456789'), '123456789');
+check('ondemand url', Anchor_FM_Vimeo::parse_id('https://vimeo.com/ondemand/someshow/123456789'), '123456789');
+check('album url', Anchor_FM_Vimeo::parse_id('https://vimeo.com/album/12345/video/123456789'), '123456789');
+check('groups url', Anchor_FM_Vimeo::parse_id('https://vimeo.com/groups/foo/videos/123456789'), '123456789');
+check('iframe embed code', Anchor_FM_Vimeo::parse_id('<iframe src="https://player.vimeo.com/video/123456789?h=abcdef0123&title=0" width="640"></iframe>'), '123456789');
+check('bare id with whitespace', Anchor_FM_Vimeo::parse_id('  123456789  '), '123456789');
+check('http (not https)', Anchor_FM_Vimeo::parse_id('http://vimeo.com/123456789'), '123456789');
+check('www subdomain', Anchor_FM_Vimeo::parse_id('https://www.vimeo.com/123456789'), '123456789');
+
+// --- Anchor_FM_Vimeo::parse_ref (id + unlisted hash) ---
+check('ref: bare id has no hash', Anchor_FM_Vimeo::parse_ref('123456789'), ['id' => '123456789', 'hash' => '']);
+check('ref: public url has no hash', Anchor_FM_Vimeo::parse_ref('https://vimeo.com/123456789'), ['id' => '123456789', 'hash' => '']);
+check('ref: unlisted path hash', Anchor_FM_Vimeo::parse_ref('https://vimeo.com/123456789/abcdef0123'), ['id' => '123456789', 'hash' => 'abcdef0123']);
+check('ref: unlisted query hash', Anchor_FM_Vimeo::parse_ref('https://vimeo.com/123456789?h=abcdef0123'), ['id' => '123456789', 'hash' => 'abcdef0123']);
+check('ref: player url query hash', Anchor_FM_Vimeo::parse_ref('https://player.vimeo.com/video/123456789?h=abcdef0123'), ['id' => '123456789', 'hash' => 'abcdef0123']);
+check('ref: iframe embed keeps hash', Anchor_FM_Vimeo::parse_ref('<iframe src="https://player.vimeo.com/video/123456789?h=abcdef0123&title=0"></iframe>'), ['id' => '123456789', 'hash' => 'abcdef0123']);
+check('ref: manage url has no hash', Anchor_FM_Vimeo::parse_ref('https://vimeo.com/manage/videos/123456789'), ['id' => '123456789', 'hash' => '']);
+check('ref: trailing slash is not a hash', Anchor_FM_Vimeo::parse_ref('https://vimeo.com/123456789/'), ['id' => '123456789', 'hash' => '']);
+check('ref: garbage is empty', Anchor_FM_Vimeo::parse_ref('not a video'), ['id' => '', 'hash' => '']);
+
+// --- Anchor_FM_Vimeo::split_refs (bulk paste) ---
+check('split: commas', Anchor_FM_Vimeo::split_refs('123456789, 987654321'), ['123456789', '987654321']);
+check('split: newlines', Anchor_FM_Vimeo::split_refs("123456789\n987654321"), ['123456789', '987654321']);
+check('split: mixed + blanks', Anchor_FM_Vimeo::split_refs("123456789,\n\n 987654321 ,"), ['123456789', '987654321']);
+check('split: empty', Anchor_FM_Vimeo::split_refs('   '), []);
+check('split: single', Anchor_FM_Vimeo::split_refs('https://vimeo.com/123456789'), ['https://vimeo.com/123456789']);
+
+// --- Anchor_FM_Vimeo::video_url ---
+check('video_url: public', Anchor_FM_Vimeo::video_url('123456789'), 'https://vimeo.com/123456789');
+check('video_url: unlisted appends hash', Anchor_FM_Vimeo::video_url('123456789', 'abcdef0123'), 'https://vimeo.com/123456789/abcdef0123');
+check('video_url: no id', Anchor_FM_Vimeo::video_url(''), '');
+
+// --- Anchor_FM_Vimeo::fetch_meta ---
+// Body captured from the live oEmbed API for vimeo.com/22439234.
+$real_body = '{"type":"video","version":"1.0","provider_name":"Vimeo","title":"The Mountain","author_name":"TSO Photography","duration":185,"thumbnail_url":"https:\/\/i.vimeocdn.com\/video\/145027281-cf3e3e047a52e2210b26bbcf42fcde909a80a7dd023a757b95af01936d065ec0-d_295x166?region=us","video_id":22439234}';
+
+$GLOBALS['afm_http_stub'] = ['response' => ['code' => 200], 'body' => $real_body];
+check('fetch_meta: reads title', Anchor_FM_Vimeo::fetch_meta('22439234')['title'], 'The Mountain');
+check('fetch_meta: reads thumbnail', Anchor_FM_Vimeo::fetch_meta('22439234')['thumbnail_url'], 'https://i.vimeocdn.com/video/145027281-cf3e3e047a52e2210b26bbcf42fcde909a80a7dd023a757b95af01936d065ec0-d_295x166?region=us');
+Anchor_FM_Vimeo::fetch_meta('123456789', 'abcdef0123');
+check('fetch_meta: hash reaches the endpoint', strpos($GLOBALS['afm_http_last_url'], rawurlencode('https://vimeo.com/123456789/abcdef0123')) !== false, true);
+
+// 404 is ambiguous on the live API: it answers 404 both for a missing video and
+// for a real one whose owner blocks embedding. The message must not claim the
+// video doesn't exist.
+$GLOBALS['afm_http_stub'] = ['response' => ['code' => 404], 'body' => '404 Not Found'];
+$e404 = Anchor_FM_Vimeo::fetch_meta('76979871');
+check('fetch_meta: 404 is a WP_Error', is_wp_error($e404), true);
+check('fetch_meta: 404 does not claim deletion', strpos($e404->get_error_message(), 'blocks embedding') !== false, true);
+
+$GLOBALS['afm_http_stub'] = ['response' => ['code' => 403], 'body' => ''];
+check('fetch_meta: 403 mentions the hash', strpos(Anchor_FM_Vimeo::fetch_meta('1')->get_error_message(), 'hash') !== false, true);
+
+$GLOBALS['afm_http_stub'] = ['response' => ['code' => 500], 'body' => ''];
+check('fetch_meta: 500 is an error', is_wp_error(Anchor_FM_Vimeo::fetch_meta('1')), true);
+
+$GLOBALS['afm_http_stub'] = ['response' => ['code' => 200], 'body' => 'not json'];
+check('fetch_meta: junk body is an error', is_wp_error(Anchor_FM_Vimeo::fetch_meta('1')), true);
+
+$GLOBALS['afm_http_stub'] = ['response' => ['code' => 200], 'body' => '{"title":"No thumb here"}'];
+check('fetch_meta: missing thumbnail is not fatal', Anchor_FM_Vimeo::fetch_meta('1')['thumbnail_url'], '');
+
+$GLOBALS['afm_http_stub'] = null;
+check('fetch_meta: transport failure surfaces', is_wp_error(Anchor_FM_Vimeo::fetch_meta('1')), true);
+check('fetch_meta: empty id never calls out', is_wp_error(Anchor_FM_Vimeo::fetch_meta('')), true);
+
+check('fallback_title', Anchor_FM_Vimeo::fallback_title('123456789'), 'Vimeo video 123456789');
 
 require __DIR__ . '/../includes/class-afm-watch-math.php';
 

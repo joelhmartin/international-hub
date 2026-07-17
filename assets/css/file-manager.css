@@ -76,11 +76,6 @@
   margin-top: 2px;
 }
 
-.afm__sidebarActions {
-  display: flex;
-  gap: 10px;
-}
-
 .afm__tree {
   flex: 1;
   overflow: visible;
@@ -237,11 +232,73 @@
   flex-direction: column;
 }
 
+/* Utility bar — admin-leaning actions, right-aligned above the main header.
+   Hidden by default and only shown when it actually has a visible child, so a
+   user whose permissions leave every action hidden gets no empty strip and no
+   stray border. */
+.afm__utilityBar {
+  display: none;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 18px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--afm-border);
+  background: var(--afm-bg);
+}
+
+.afm__utilityBar:has(> *:not([hidden])) {
+  display: flex;
+}
+
+.afm__utilityLink {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  margin: 0;
+  padding: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--afm-faint);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+/* Must be explicit: the display above would otherwise beat the UA stylesheet's
+   [hidden] rule and keep files-only links visible on every tab. */
+.afm__utilityLink[hidden] {
+  display: none;
+}
+
+.afm__utilityLink:hover {
+  color: var(--afm-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.afm__utilityLink:focus-visible {
+  outline: 2px solid var(--afm-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.afm__utilityLink .dashicons {
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+}
+
 .afm__toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--afm-border);
   background: var(--afm-bg);
@@ -320,20 +377,22 @@
   user-select: none;
 }
 
-.afm__toolbarRight {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
+/* Search takes the space the action buttons used to occupy, capped so it stays
+   a search field rather than a banner on wide screens. */
 .afm__search {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
+  max-width: 420px;
   border: 1px solid var(--afm-border);
   background: var(--afm-panel);
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 999px;
+}
+
+.afm__search[hidden] {
+  display: none;
 }
 
 .afm__search input {
@@ -341,13 +400,20 @@
   outline: 0;
   background: transparent;
   color: var(--afm-text);
-  min-width: 180px;
+  flex: 1;
+  min-width: 0;
 }
 
 .afm__upload {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* An author `display` beats the UA stylesheet's `[hidden] { display: none }`,
+   so this rule is what actually makes prop('hidden', true) take effect. */
+.afm__upload[hidden] {
+  display: none;
 }
 
 .afm:not(.afm--canUpload) .afm__upload {
@@ -949,6 +1015,85 @@
   min-width: 220px;
 }
 
+.afm__textarea {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.afm__hint {
+  color: var(--afm-muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+/* Bulk video review: one row per resolved video, scrollable so a long paste
+   can't push the modal's Add button off-screen. */
+.afm__videoReview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.afm__videoReviewRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.afm__videoReviewThumb {
+  flex: none;
+  width: 96px;
+  height: 54px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--afm-panel);
+  border: 1px solid var(--afm-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--afm-faint);
+}
+
+.afm__videoReviewThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.afm__videoReviewMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.afm__videoReviewMain .afm__input {
+  width: 100%;
+  min-width: 0;
+}
+
+.afm__videoReviewMeta {
+  color: var(--afm-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.afm__videoReviewWarn {
+  display: block;
+  color: var(--afm-warn, #d08b00);
+}
+
+.afm__videoReviewBroken {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--afm-border);
+}
+
 .afm__help {
   color: var(--afm-muted);
   font-size: 12px;
@@ -1129,6 +1274,26 @@
 .afm__rowName { display: flex; align-items: center; gap: 8px; padding-left: var(--afm-row-pad, 12px); min-width: 0; }
 .afm__rowLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .afm__rowIcon { color: var(--afm-accent); flex: none; }
+
+/* Video rows swap the dashicon for a Vimeo thumbnail. Sized to the icon's
+   footprint so rows keep a uniform height whether a thumbnail loads or not. */
+.afm__rowIcon--thumb {
+  width: 32px;
+  height: 20px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--afm-panel);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.afm__rowIcon--thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .afm__rowKind, .afm__rowSize, .afm__rowModified { font-size: 12px; color: var(--afm-muted); }
 .afm__rowActions { display: flex; justify-content: flex-end; }
 .afm__rowDisclosure {

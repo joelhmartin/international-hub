@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.9.18
+ * Version: 2.10.0
  * Author: Anchor Corps
  */
 
@@ -14,10 +14,15 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.9.18';
+    const VERSION = '2.10.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
+    /**
+     * Ceiling on one bulk video import. Each entry costs an outbound oEmbed
+     * call, so an unbounded paste could stall the request past PHP's timeout.
+     */
+    const VIMEO_BULK_MAX = 50;
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
     const META_PRODUCT_DOCS = '_anchor_pd_docs';
@@ -58,6 +63,7 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_rename_file', [$this, 'ajax_rename_file']);
         add_action('wp_ajax_anchor_fm_vimeo_get', [$this, 'ajax_vimeo_get']);
         add_action('wp_ajax_anchor_fm_vimeo_add', [$this, 'ajax_vimeo_add']);
+        add_action('wp_ajax_anchor_fm_vimeo_resolve', [$this, 'ajax_vimeo_resolve']);
         add_action('wp_ajax_anchor_fm_vimeo_update', [$this, 'ajax_vimeo_update']);
         add_action('wp_ajax_anchor_fm_vimeo_delete', [$this, 'ajax_vimeo_delete']);
         add_action('wp_ajax_anchor_fm_vimeo_progress', [$this, 'ajax_vimeo_progress']);
@@ -408,7 +414,9 @@ class Anchor_Private_File_Manager {
                 id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
                 folder_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
                 vimeo_id VARCHAR(32) NOT NULL,
+                vimeo_hash VARCHAR(64) NOT NULL DEFAULT '',
                 title VARCHAR(255) NOT NULL,
+                thumbnail_url VARCHAR(255) NOT NULL DEFAULT '',
                 created_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL,
@@ -627,51 +635,60 @@ class Anchor_Private_File_Manager {
                             <?php esc_html_e('Log out', 'anchor-private-file-manager'); ?>
                         </a>
                     </nav>
-                    <?php if (current_user_can('administrator')) : ?>
-                    <div class="afm__sidebarActions" data-apfm-files-only>
-                        <button type="button" class="afm__btn afm__btn--ghost" data-afm-action="new-folder">
-                            <span class="dashicons dashicons-plus" aria-hidden="true"></span>
-                            <?php esc_html_e('New folder', 'anchor-private-file-manager'); ?>
-                        </button>
-                    </div>
-                    <?php endif; ?>
                     <div class="afm__tree" data-afm-tree></div>
                     <div class="afm__resizer" data-afm-resizer aria-hidden="true"></div>
                 </aside>
 
                 <main class="afm__main" aria-label="<?php esc_attr_e('Account content', 'anchor-private-file-manager'); ?>">
+                    <?php
+                    /*
+                     * Utility bar: low-key admin actions kept out of the way of
+                     * the everyday header below. Collapses to nothing (see
+                     * .afm__utilityBar:has() in the CSS) when the current user
+                     * and tab leave it with no visible children, so a
+                     * view-only user never sees an empty strip.
+                     *
+                     * Upload is deliberately NOT inside the administrator
+                     * check: it is gated per-folder by capability, so a
+                     * non-admin with manage rights can still upload.
+                     */
+                    ?>
+                    <div class="afm__utilityBar" data-afm-utility-bar>
+                        <button type="button" class="afm__utilityLink" data-apfm-action="refresh">
+                            <span class="dashicons dashicons-update" aria-hidden="true"></span>
+                            <?php esc_html_e('Refresh', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <?php if (current_user_can('administrator')) : ?>
+                        <button type="button" class="afm__utilityLink" data-afm-action="new-folder" data-apfm-files-only>
+                            <span class="dashicons dashicons-plus" aria-hidden="true"></span>
+                            <?php esc_html_e('New folder', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="afm__utilityLink" data-afm-action="new-link" data-apfm-files-only>
+                            <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
+                            <?php esc_html_e('New link', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <button type="button" class="afm__utilityLink" data-afm-action="new-video" data-apfm-files-only>
+                            <span class="dashicons dashicons-video-alt3" aria-hidden="true"></span>
+                            <?php esc_html_e('New video', 'anchor-private-file-manager'); ?>
+                        </button>
+                        <?php endif; ?>
+                        <div class="afm__upload" data-apfm-upload hidden>
+                            <input type="file" multiple class="afm__fileInput" data-afm-file-input>
+                            <button type="button" class="afm__btn afm__btn--primary" data-afm-action="upload">
+                                <span class="dashicons dashicons-upload" aria-hidden="true"></span>
+                                <?php esc_html_e('Upload', 'anchor-private-file-manager'); ?>
+                            </button>
+                        </div>
+                    </div>
                     <header class="afm__toolbar">
                         <div class="afm__breadcrumbs">
                             <span class="aap__title" data-apfm-title><?php esc_html_e('Documents', 'anchor-private-file-manager'); ?></span>
                             <div class="afm__breadcrumbsTrail" data-afm-breadcrumbs></div>
                         </div>
-                        <div class="afm__toolbarRight">
-                            <label class="afm__search" data-apfm-search hidden>
-                                <span class="dashicons dashicons-search" aria-hidden="true"></span>
-                                <input type="search" placeholder="<?php esc_attr_e('Search all documents…', 'anchor-private-file-manager'); ?>" data-afm-search>
-                            </label>
-                            <button type="button" class="afm__btn afm__btn--secondary" data-apfm-action="refresh">
-                                <span class="dashicons dashicons-update" aria-hidden="true"></span>
-                                <?php esc_html_e('Refresh', 'anchor-private-file-manager'); ?>
-                            </button>
-                            <?php if (current_user_can('administrator')) : ?>
-                            <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="new-link" data-apfm-files-only>
-                                <span class="dashicons dashicons-admin-links" aria-hidden="true"></span>
-                                <?php esc_html_e('New link', 'anchor-private-file-manager'); ?>
-                            </button>
-                            <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="new-video" data-apfm-files-only>
-                                <span class="dashicons dashicons-video-alt3" aria-hidden="true"></span>
-                                <?php esc_html_e('New video', 'anchor-private-file-manager'); ?>
-                            </button>
-                            <?php endif; ?>
-                            <div class="afm__upload" data-apfm-upload hidden>
-                                <input type="file" multiple class="afm__fileInput" data-afm-file-input>
-                                <button type="button" class="afm__btn afm__btn--primary" data-afm-action="upload">
-                                    <span class="dashicons dashicons-upload" aria-hidden="true"></span>
-                                    <?php esc_html_e('Upload', 'anchor-private-file-manager'); ?>
-                                </button>
-                            </div>
-                        </div>
+                        <label class="afm__search" data-apfm-search hidden>
+                            <span class="dashicons dashicons-search" aria-hidden="true"></span>
+                            <input type="search" placeholder="<?php esc_attr_e('Search all documents…', 'anchor-private-file-manager'); ?>" data-afm-search>
+                        </label>
                     </header>
 
                     <section class="afm__content">
@@ -1124,13 +1141,17 @@ class Anchor_Private_File_Manager {
         $title = Anchor_FM_Copy_Namer::resolve_unique($video->title, $existing, false, $force_copy);
         $now = current_time('mysql');
         $wpdb->insert(self::table('videos'), [
-            'folder_id'  => (int) $target_folder_id,
-            'vimeo_id'   => $video->vimeo_id,
-            'title'      => $title,
-            'created_by' => get_current_user_id(),
-            'created_at' => $now,
-            'updated_at' => $now,
-        ], ['%d','%s','%s','%d','%s','%s']);
+            'folder_id'     => (int) $target_folder_id,
+            'vimeo_id'      => $video->vimeo_id,
+            // Carry the privacy hash and thumbnail: a copy without the hash
+            // would not play for unlisted videos.
+            'vimeo_hash'    => isset($video->vimeo_hash) ? (string) $video->vimeo_hash : '',
+            'title'         => $title,
+            'thumbnail_url' => isset($video->thumbnail_url) ? (string) $video->thumbnail_url : '',
+            'created_by'    => get_current_user_id(),
+            'created_at'    => $now,
+            'updated_at'    => $now,
+        ], ['%d','%s','%s','%s','%s','%d','%s','%s']);
         $existing[] = $title;
         return (int) $wpdb->insert_id;
     }
@@ -1517,7 +1538,7 @@ class Anchor_Private_File_Manager {
         if ($folder_id > 0) {
             $videos_table = self::table('videos');
             $video_rows = $wpdb->get_results($wpdb->prepare(
-                "SELECT id, folder_id, vimeo_id, title, created_by, created_at FROM {$videos_table} WHERE folder_id = %d ORDER BY created_at DESC",
+                "SELECT id, folder_id, vimeo_id, vimeo_hash, title, thumbnail_url, created_by, created_at FROM {$videos_table} WHERE folder_id = %d ORDER BY created_at DESC",
                 $folder_id
             ));
             foreach ((array) $video_rows as $v) {
@@ -1526,6 +1547,8 @@ class Anchor_Private_File_Manager {
                     'id' => (int) $v->id,
                     'title' => $v->title,
                     'vimeoId' => $v->vimeo_id,
+                    'vimeoHash' => isset($v->vimeo_hash) ? (string) $v->vimeo_hash : '',
+                    'thumbnailUrl' => isset($v->thumbnail_url) ? (string) $v->thumbnail_url : '',
                     'createdBy' => !empty($v->created_by) ? (int) $v->created_by : 0,
                     'createdAt' => $v->created_at,
                 ];
@@ -1613,13 +1636,15 @@ class Anchor_Private_File_Manager {
 
         // Videos
         $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT id, folder_id, title, vimeo_id FROM {$videos} WHERE title LIKE %s ORDER BY title ASC LIMIT %d",
+            "SELECT id, folder_id, title, vimeo_id, vimeo_hash, thumbnail_url FROM {$videos} WHERE title LIKE %s ORDER BY title ASC LIMIT %d",
             $like, $cap
         ));
         foreach ((array) $rows as $r) {
             if (!$this->can_user_view_video($user_id, (int) $r->id)) continue;
             $results[] = [
                 'kind' => 'video', 'id' => (int) $r->id, 'name' => $r->title, 'vimeoId' => $r->vimeo_id,
+                'vimeoHash' => isset($r->vimeo_hash) ? (string) $r->vimeo_hash : '',
+                'thumbnailUrl' => isset($r->thumbnail_url) ? (string) $r->thumbnail_url : '',
                 'folderId' => (int) $r->folder_id,
                 'path' => $this->folder_path_string((int) $r->folder_id),
             ];
@@ -2095,8 +2120,76 @@ class Anchor_Private_File_Manager {
             'id' => (int) $video->id,
             'title' => $video->title,
             'vimeoId' => $video->vimeo_id,
+            'vimeoHash' => isset($video->vimeo_hash) ? (string) $video->vimeo_hash : '',
+            'thumbnailUrl' => isset($video->thumbnail_url) ? (string) $video->thumbnail_url : '',
             'folderId' => (int) $video->folder_id,
         ]]);
+    }
+
+    /**
+     * Resolve a pasted blob of Vimeo references into reviewable entries.
+     * Read-only: writes nothing, so the UI can show titles before committing.
+     */
+    public function ajax_vimeo_resolve() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
+        $raw = isset($_POST['refs']) ? (string) wp_unslash($_POST['refs']) : '';
+
+        if ($folder_id <= 0) $this->json_error('Pick a folder first');
+        if (!user_can($user_id, 'administrator') || !$this->can_user_manage_folder($user_id, $folder_id)) {
+            $this->json_error('Forbidden', 403);
+        }
+
+        $refs = Anchor_FM_Vimeo::split_refs($raw);
+        if (empty($refs)) $this->json_error('Paste at least one Vimeo link or ID');
+        if (count($refs) > self::VIMEO_BULK_MAX) {
+            $this->json_error(sprintf('Too many at once — %d max, got %d', self::VIMEO_BULK_MAX, count($refs)));
+        }
+
+        $entries = [];
+        $seen = [];
+        foreach ($refs as $ref) {
+            $parsed = Anchor_FM_Vimeo::parse_ref($ref);
+            if ($parsed['id'] === '') {
+                $entries[] = [
+                    'input' => $ref, 'vimeoId' => '', 'hash' => '', 'title' => '',
+                    'thumbnailUrl' => '', 'error' => 'Could not read a Vimeo ID from this',
+                ];
+                continue;
+            }
+            // Same video pasted twice: keep one row rather than silently
+            // importing a duplicate.
+            if (isset($seen[$parsed['id']])) {
+                $entries[] = [
+                    'input' => $ref, 'vimeoId' => $parsed['id'], 'hash' => $parsed['hash'],
+                    'title' => '', 'thumbnailUrl' => '', 'error' => 'Duplicate of another entry in this list',
+                ];
+                continue;
+            }
+            $seen[$parsed['id']] = true;
+
+            $meta = Anchor_FM_Vimeo::fetch_meta($parsed['id'], $parsed['hash']);
+            if (is_wp_error($meta)) {
+                // Non-fatal: importable, just un-describable. Title falls back
+                // and the UI surfaces why so it can be corrected by hand.
+                $entries[] = [
+                    'input' => $ref, 'vimeoId' => $parsed['id'], 'hash' => $parsed['hash'],
+                    'title' => Anchor_FM_Vimeo::fallback_title($parsed['id']),
+                    'thumbnailUrl' => '', 'error' => '',
+                    'warning' => $meta->get_error_message(),
+                ];
+                continue;
+            }
+            $entries[] = [
+                'input' => $ref, 'vimeoId' => $parsed['id'], 'hash' => $parsed['hash'],
+                'title' => $meta['title'], 'thumbnailUrl' => $meta['thumbnail_url'], 'error' => '',
+            ];
+        }
+
+        $this->json_success(['entries' => $entries]);
     }
 
     public function ajax_vimeo_add() {
@@ -2105,31 +2198,102 @@ class Anchor_Private_File_Manager {
         $user_id = get_current_user_id();
 
         $folder_id = isset($_POST['folder_id']) ? (int) $_POST['folder_id'] : 0;
-        $title = isset($_POST['title']) ? sanitize_text_field((string) $_POST['title']) : '';
-        $raw = isset($_POST['vimeo']) ? (string) $_POST['vimeo'] : '';
-        $vimeo_id = Anchor_FM_Vimeo::parse_id($raw);
-
-        if ($folder_id <= 0 || $title === '') $this->json_error('Missing fields');
-        if ($vimeo_id === '') $this->json_error('Could not read a Vimeo ID from that input');
+        if ($folder_id <= 0) $this->json_error('Pick a folder first');
         if (!user_can($user_id, 'administrator') || !$this->can_user_manage_folder($user_id, $folder_id)) {
             $this->json_error('Forbidden', 403);
+        }
+
+        // Accepts either a bulk `videos` array or the single-video
+        // {title, vimeo} shape the old modal posted.
+        $incoming = [];
+        if (isset($_POST['videos']) && is_array($_POST['videos'])) {
+            $incoming = $_POST['videos'];
+        } elseif (isset($_POST['vimeo'])) {
+            $incoming = [[
+                'vimeo' => (string) $_POST['vimeo'],
+                'title' => isset($_POST['title']) ? (string) $_POST['title'] : '',
+            ]];
+        }
+        if (empty($incoming)) $this->json_error('Nothing to add');
+        if (count($incoming) > self::VIMEO_BULK_MAX) {
+            $this->json_error(sprintf('Too many at once — %d max, got %d', self::VIMEO_BULK_MAX, count($incoming)));
         }
 
         global $wpdb;
         $videos = self::table('videos');
         $now = current_time('mysql');
-        $wpdb->insert($videos, [
-            'folder_id' => $folder_id,
-            'vimeo_id' => $vimeo_id,
-            'title' => $title,
-            'created_by' => $user_id,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ], ['%d','%s','%s','%d','%s','%s']);
-        $video_id = (int) $wpdb->insert_id;
-        $this->log_activity($user_id, 'create_video', 'video', $video_id, ['folder_id' => $folder_id, 'vimeo_id' => $vimeo_id]);
 
-        $this->json_success(['videoId' => $video_id, 'vimeoId' => $vimeo_id]);
+        $added = [];
+        $failed = [];
+        foreach ($incoming as $row) {
+            if (!is_array($row)) continue;
+            $raw    = isset($row['vimeo']) && is_scalar($row['vimeo']) ? (string) wp_unslash($row['vimeo']) : '';
+            $title  = isset($row['title']) && is_scalar($row['title']) ? sanitize_text_field((string) wp_unslash($row['title'])) : '';
+            $parsed = Anchor_FM_Vimeo::parse_ref($raw);
+
+            if ($parsed['id'] === '') {
+                $failed[] = ['input' => $raw, 'message' => 'Could not read a Vimeo ID from that input'];
+                continue;
+            }
+            // An explicit hash from the client wins; it may carry a hash the
+            // bare id in `vimeo` cannot express.
+            $hash = isset($row['hash']) && is_scalar($row['hash'])
+                ? preg_replace('/[^A-Za-z0-9]/', '', (string) wp_unslash($row['hash']))
+                : '';
+            if ($hash === '') { $hash = $parsed['hash']; }
+
+            // Title is optional now — it defaults to the Vimeo title, and to a
+            // readable placeholder when Vimeo can't be reached.
+            $thumb = isset($row['thumbnailUrl']) && is_scalar($row['thumbnailUrl'])
+                ? esc_url_raw((string) wp_unslash($row['thumbnailUrl']))
+                : '';
+            if ($title === '') {
+                $meta = Anchor_FM_Vimeo::fetch_meta($parsed['id'], $hash);
+                if (!is_wp_error($meta)) {
+                    $title = sanitize_text_field($meta['title']);
+                    if ($thumb === '') { $thumb = esc_url_raw($meta['thumbnail_url']); }
+                }
+                if ($title === '') { $title = Anchor_FM_Vimeo::fallback_title($parsed['id']); }
+            }
+
+            $ok = $wpdb->insert($videos, [
+                'folder_id'     => $folder_id,
+                'vimeo_id'      => $parsed['id'],
+                'vimeo_hash'    => $hash,
+                'title'         => $title,
+                'thumbnail_url' => $thumb,
+                'created_by'    => $user_id,
+                'created_at'    => $now,
+                'updated_at'    => $now,
+            ], ['%d','%s','%s','%s','%s','%d','%s','%s']);
+
+            if ($ok === false) {
+                $failed[] = ['input' => $raw, 'message' => 'Database error saving this video'];
+                continue;
+            }
+
+            $video_id = (int) $wpdb->insert_id;
+            $this->log_activity($user_id, 'create_video', 'video', $video_id, ['folder_id' => $folder_id, 'vimeo_id' => $parsed['id']]);
+            $added[] = [
+                'videoId' => $video_id, 'vimeoId' => $parsed['id'],
+                'title' => $title, 'thumbnailUrl' => $thumb,
+            ];
+        }
+
+        // Every row failing is an error; a partial import is a success that
+        // reports its casualties.
+        if (empty($added)) {
+            $first = !empty($failed) ? $failed[0]['message'] : 'Nothing could be added';
+            $this->json_error($first);
+        }
+
+        $this->json_success([
+            'added'  => $added,
+            'failed' => $failed,
+            // Single-video callers still read these.
+            'videoId' => $added[0]['videoId'],
+            'vimeoId' => $added[0]['vimeoId'],
+        ]);
     }
 
     public function ajax_vimeo_update() {
