@@ -28,7 +28,7 @@
   border-radius: var(--afm-radius);
   overflow: clip;
   box-shadow: var(--afm-shadow);
-  min-height: 620px;
+  min-height: 520px;
   display: grid;
   grid-template-columns: var(--afm-sidebar-width) minmax(0, 1fr) 0px;
   transition: grid-template-columns 160ms ease;
@@ -38,6 +38,12 @@
   grid-template-columns: var(--afm-sidebar-width) minmax(0, 1fr) 420px;
 }
 
+/* No max-height and no scrolling of its own: the sidebar is a grid item and
+   stretches to the full height of the frame. Capping it at 80vh both cut it
+   short of the frame and — because overflow-y:auto forces overflow-x to
+   compute as auto — gave it a horizontal scrollbar, triggered by the resizer
+   handle that deliberately sits 10px past the right edge. Scrolling now lives
+   on the tree alone. */
 .afm__sidebar {
   border-right: 1px solid var(--afm-border);
   background: var(--afm-bg);
@@ -45,8 +51,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--afm-gap);
-  max-height: 80vh;
-  overflow-y: auto;
+  min-height: 0;
   position: relative;
 }
 
@@ -76,9 +81,23 @@
   margin-top: 2px;
 }
 
+/* Scroll host for the folder tree. The tree itself is taken out of flow inside
+   it so a deep folder list cannot dictate the frame's height — the frame is
+   sized by the nav and the file list, and the tree scrolls inside whatever
+   height is left over. A flex item that merely sets overflow:auto still
+   reports its full content height to an auto-height flex container, which is
+   why this needs the absolutely-positioned child rather than flex-basis: 0. */
+.afm__treeScroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 160px;
+}
+
 .afm__tree {
-  flex: 1;
-  overflow: visible;
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 6px;
 }
 
@@ -759,17 +778,29 @@
   background: var(--afm-panel);
 }
 
+/* The two drawers live inside <main>, but they must not take part in its
+   vertical flow: as static flex items they each reserved their full height
+   below the file list even while closed and translated off-screen, which is
+   what pushed several hundred px of empty white space under the table. Out of
+   flow they cost nothing, and because .afm__frame is the nearest positioned
+   ancestor they land exactly on the 420px column the frame opens for them. */
 .afm__drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 100%;
   border-left: 1px solid var(--afm-border);
   background: var(--afm-bg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  width: 100%;
   transform: translateX(100%);
   opacity: 0;
   pointer-events: none;
   transition: transform 160ms ease, opacity 160ms ease;
+  z-index: 3;
 }
 
 .afm__drawer.is-open {
@@ -797,6 +828,8 @@
 
 .afm__drawerBody {
   padding: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1217,12 +1250,25 @@
 @media (max-width: 980px) {
   .afm__frame {
     grid-template-columns: 1fr;
-    min-height: 680px;
+    min-height: 0;
   }
 
   .afm__sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--afm-border);
+  }
+
+  /* Stacked layout: there is no leftover column height for the tree to fill,
+     so it goes back into normal flow and the page scrolls instead. */
+  .afm__treeScroll {
+    position: static;
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
+  .afm__tree {
+    position: static;
+    overflow: visible;
   }
 
   .afm__drawer {

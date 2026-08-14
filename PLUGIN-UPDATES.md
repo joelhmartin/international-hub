@@ -1,59 +1,69 @@
-# Anchor Tools Plugin Update Architecture
+# Anchor Private File Manager — Update Architecture
 
-This plugin uses the YahnisElsts Plugin Update Checker (PUC) library to pull
-updates from a GitHub repository and surface them in the WordPress updates UI.
-The configuration lives in `anchor-tools.php`.
+This plugin pulls its own updates from GitHub and surfaces them in the normal
+WordPress updates UI, using the same setup as the Anchor Tools plugin: the
+YahnisElsts Plugin Update Checker (PUC) library plus a tag-triggered GitHub
+Actions release build.
 
 ## Overview
 - Library: `yahnis-elsts/plugin-update-checker` (autoloaded from `vendor/`).
-- Source: GitHub repo `https://github.com/joelhmartin/Anchor-Tools/`.
-- Branch: `main`.
-- Update delivery:
-  - If a GitHub release asset is available, PUC will use it.
-  - Otherwise it falls back to the repo zipball for the configured branch.
+- Source repo: `https://github.com/joelhmartin/international-hub/`.
+- Configured branch: `main`.
+- Release build: `.github/workflows/release.yml`, triggered by pushing a tag.
 
-## Requirements
-- The Composer vendor folder must be present (`vendor/autoload.php`).
-- The update checker is initialized in `anchor-tools.php` on load.
+## How a version is detected
+`setBranch('main')` puts PUC into its release-aware mode. It tries, in order:
 
-## Authentication (optional but recommended)
-For private repos or higher API limits, supply a GitHub token:
+1. The latest **GitHub release** — this is the path we use.
+2. Failing that, the **tag** with the highest version number (zipball of the tag).
+3. Failing that, the `main` branch itself.
 
-- `.env` file in the plugin root:
-  ```
-  GITHUB_ACCESS_TOKEN=your_token_here
-  ```
-- Or environment variable `GITHUB_ACCESS_TOKEN`.
-- Or a `GITHUB_ACCESS_TOKEN` PHP constant.
+`enableReleaseAssets()` then makes it download the ZIP attached to the release
+rather than GitHub's auto-generated zipball, so the package is exactly what the
+workflow built. PUC's `upgrader_source_selection` filter renames the extracted
+directory to the plugin's installed folder, so the folder name inside the ZIP
+does not have to match the live install.
 
-The plugin loads `.env` via Dotenv if the file exists.
+The version PUC compares against is the `Version:` header in
+`anchor-private-file-manager.php`. A tag whose code carries a header version
+lower than or equal to the installed one will not offer an update.
 
-## How It Is Wired
-Configuration in `anchor-tools.php`:
-- `PucFactory::buildUpdateChecker(...)` points at the GitHub repo URL.
-- `setBranch('main')` pins updates to the main branch.
-- `setAuthentication($token)` is used when a token is provided.
-- `enableReleaseAssets()` switches the VCS API to prefer release assets.
+## Release workflow
+1. Bump **both** version markers in `anchor-private-file-manager.php`:
+   - the `Version:` plugin header, and
+   - `const VERSION` on the main class.
+   They must match — the header drives WordPress, the constant drives the
+   plugin's own DB upgrade routine.
+2. Commit and push to `main`.
+3. Tag and push the tag:
+   ```
+   git tag 2.10.1
+   git push origin 2.10.1
+   ```
+4. The `Release` workflow runs on the tag: installs Composer production
+   dependencies, runs `php tests/run.php`, builds
+   `anchor-private-file-manager.zip` (inner folder
+   `anchor-private-file-manager/`, dev files stripped), and publishes a GitHub
+   release with that ZIP attached and auto-generated notes.
+5. WordPress picks it up on its next update check.
 
-## Release Workflow
-1) Bump the plugin header `Version:` in `anchor-tools.php`.
-2) Build a release ZIP that contains the plugin folder and all required files
-   (including `vendor/` if you are not installing Composer dependencies on the
-   target site).
-3) Create a GitHub release for the new tag and upload the ZIP as a release
-   asset.
-4) WordPress will detect the update and offer it in the Updates screen.
+Tag format must match `[0-9]+.[0-9]+.[0-9]+*` or the workflow will not fire.
 
-If no release asset is present, PUC will use the GitHub zipball for `main`.
+## Authentication (optional)
+The repo is public, so no token is required. For a private repo or to raise the
+GitHub API rate limit, supply a token via any of:
 
-## Forcing an Update Check
-- In WP Admin, go to Dashboard > Updates and click "Check Again".
-- Or clear the update checker cache in the WordPress options table
-  (PUC stores state in `puc_*` options).
+- a `.env` file in the plugin root containing `GITHUB_ACCESS_TOKEN=...`
+  (loaded through Dotenv when the file exists),
+- a `GITHUB_ACCESS_TOKEN` environment variable, or
+- a `GITHUB_ACCESS_TOKEN` PHP constant.
 
-## Debugging
-The plugin logs two upgrader hooks to PHP error logs:
-- `upgrader_pre_download`
-- `upgrader_source_selection`
+Never commit `.env`; the release build excludes it.
 
-Check the PHP error log for `[Anchor Tools]` entries if updates fail.
+## Forcing an update check
+- WP Admin → Dashboard → Updates → "Check Again".
+- Or delete the `puc_*` rows PUC stores in the options table.
+
+## Assets and caching
+Front-end CSS/JS are enqueued with `filemtime()` as the version string, so a
+released change to `assets/` busts the browser cache without a version bump.
