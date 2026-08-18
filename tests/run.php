@@ -25,6 +25,7 @@ function wp_remote_retrieve_response_code($res) { return isset($res['response'][
 function wp_remote_retrieve_body($res) { return isset($res['body']) ? $res['body'] : ''; }
 
 require __DIR__ . '/../includes/class-afm-vimeo.php';
+require __DIR__ . '/../includes/class-afm-range.php';
 
 $failures = 0;
 function check($label, $actual, $expected) {
@@ -241,6 +242,47 @@ check('resolve forced duplicate', Anchor_FM_Copy_Namer::resolve_unique('report.p
 check('resolve collide bumps', Anchor_FM_Copy_Namer::resolve_unique('report.pdf', ['report (copy).pdf'], true, true), 'report (copy 2).pdf');
 check('resolve case-insensitive collision', Anchor_FM_Copy_Namer::resolve_unique('Report.PDF', ['report.pdf'], true, false), 'Report (copy).PDF');
 check('resolve folder forced', Anchor_FM_Copy_Namer::resolve_unique('Docs', ['Docs (copy)'], false, true), 'Docs (copy 2)');
+
+// --- Anchor_FM_Range::parse ---
+// A 5000-byte file for every case below unless stated otherwise.
+check('range absent', Anchor_FM_Range::parse('', 5000), null);
+check('range not bytes unit', Anchor_FM_Range::parse('items=0-99', 5000), null);
+check('range garbage', Anchor_FM_Range::parse('bytes=abc', 5000), null);
+check('range no dash', Anchor_FM_Range::parse('bytes=100', 5000), null);
+check('range multi rejected', Anchor_FM_Range::parse('bytes=0-99,200-299', 5000), null);
+check('range reversed rejected', Anchor_FM_Range::parse('bytes=900-100', 5000), null);
+check('range zero-byte file', Anchor_FM_Range::parse('bytes=0-', 0), null);
+
+check('range open-ended from zero', Anchor_FM_Range::parse('bytes=0-', 5000),
+    ['satisfiable' => true, 'start' => 0, 'end' => 4999]);
+check('range open-ended from offset', Anchor_FM_Range::parse('bytes=1000-', 5000),
+    ['satisfiable' => true, 'start' => 1000, 'end' => 4999]);
+check('range explicit window', Anchor_FM_Range::parse('bytes=500-999', 5000),
+    ['satisfiable' => true, 'start' => 500, 'end' => 999]);
+check('range end clamped to EOF', Anchor_FM_Range::parse('bytes=1000-99999', 5000),
+    ['satisfiable' => true, 'start' => 1000, 'end' => 4999]);
+check('range single byte', Anchor_FM_Range::parse('bytes=0-0', 5000),
+    ['satisfiable' => true, 'start' => 0, 'end' => 0]);
+check('range last byte', Anchor_FM_Range::parse('bytes=4999-', 5000),
+    ['satisfiable' => true, 'start' => 4999, 'end' => 4999]);
+check('range case-insensitive unit', Anchor_FM_Range::parse('BYTES=0-99', 5000),
+    ['satisfiable' => true, 'start' => 0, 'end' => 99]);
+check('range tolerates whitespace', Anchor_FM_Range::parse('bytes= 500 - 999 ', 5000),
+    ['satisfiable' => true, 'start' => 500, 'end' => 999]);
+
+// Suffix ranges: "the last N bytes". Players use these to read the container
+// index (e.g. an MP4 moov atom written at the end of the file).
+check('range suffix', Anchor_FM_Range::parse('bytes=-500', 5000),
+    ['satisfiable' => true, 'start' => 4500, 'end' => 4999]);
+check('range suffix larger than file', Anchor_FM_Range::parse('bytes=-99999', 5000),
+    ['satisfiable' => true, 'start' => 0, 'end' => 4999]);
+check('range suffix zero unsatisfiable', Anchor_FM_Range::parse('bytes=-0', 5000),
+    ['satisfiable' => false]);
+
+check('range start past EOF', Anchor_FM_Range::parse('bytes=5000-', 5000),
+    ['satisfiable' => false]);
+check('range start well past EOF', Anchor_FM_Range::parse('bytes=99999-100000', 5000),
+    ['satisfiable' => false]);
 
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
