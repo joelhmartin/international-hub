@@ -1454,3 +1454,17 @@
     padding: 0 2px;
 }
 .afm__resumeClose:hover { color: #f1f5f9; }
+
+.afm__viewerStage--video {
+    display: block;
+    background: #000;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.afm__viewerVideo {
+    display: block;
+    width: 100%;
+    max-height: 70vh;
+    background: #000;
+}
+.afm__viewerNoneAction { margin-top: 12px; }

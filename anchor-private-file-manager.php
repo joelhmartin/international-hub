@@ -2830,6 +2830,12 @@ class Anchor_Private_File_Manager {
             $type = 'image';
         } elseif ($mime === 'application/pdf') {
             $type = 'pdf';
+        } elseif (strpos($mime, 'video/') === 0) {
+            // Covers every video extension on the upload allow-list
+            // (mp4, mov, m4v, webm). Browser-level playability varies —
+            // .mov in particular fails in Firefox — so the client falls back
+            // to the download view on a media error.
+            $type = 'video';
         } elseif (in_array($mime, ['text/plain', 'text/csv', 'application/json'], true)) {
             $type = 'text';
         }

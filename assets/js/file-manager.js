@@ -767,6 +767,12 @@ jQuery(function ($) {
                 body += `<div class="afm__viewerStage"><iframe class="afm__viewerPdf" src="${esc(prev.inlineUrl)}"></iframe></div>`;
             } else if (prev.type === 'text') {
                 body += `<pre class="afm__viewerText">${esc(prev.textExcerpt || '')}</pre>`;
+            } else if (prev.type === 'video') {
+                body += `<div class="afm__viewerStage afm__viewerStage--video">
+                    <video id="afmFPlayer_${esc(file.id)}" class="afm__viewerVideo"
+                           controls preload="metadata" playsinline
+                           src="${esc(prev.inlineUrl)}"></video>
+                </div>`;
             } else {
                 body += `<div class="afm__viewerNone"><span class="dashicons dashicons-${iconForMime(file.mime)}"></span><div>No preview available</div></div>`;
             }
@@ -779,6 +785,9 @@ jQuery(function ($) {
                 ? `<a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}"><span class="dashicons dashicons-download"></span> Download</a>`
                 : '';
             openViewerModal(esc(file.name), body, footer);
+            if (prev.type === 'video') {
+                mountFilePlayer(file.id, prev.downloadUrl);
+            }
         });
     }
 
@@ -841,6 +850,39 @@ jQuery(function ($) {
         const adapter = vimeoAdapter(activePlayer);
         startMediaTracking(adapter, 'vimeo', videoId);
         applyResume(adapter, 'vimeo', videoId);
+    }
+
+    function mountFilePlayer(fileId, downloadUrl) {
+        const el = document.getElementById('afmFPlayer_' + fileId);
+        if (!el) return;
+
+        // .mov is on the upload allow-list but Firefox generally will not play
+        // it. Rather than leaving a dead black box, fall back to exactly the
+        // pre-player behaviour: the no-preview block plus Download.
+        el.addEventListener('error', function () {
+            const dl = downloadUrl
+                ? `<a class="afm__btn afm__btn--primary" href="${esc(downloadUrl)}"><span class="dashicons dashicons-download"></span> Download</a>`
+                : '';
+            $(el).closest('.afm__viewerStage').replaceWith(
+                `<div class="afm__viewerNone">
+                    <span class="dashicons dashicons-format-video"></span>
+                    <div>This video can't be played in your browser.</div>
+                    <div class="afm__viewerNoneAction">${dl}</div>
+                </div>`
+            );
+            trackState = null;
+            activeAdapter = null;
+        });
+
+        const adapter = nativeAdapter(el);
+        startMediaTracking(adapter, 'file', fileId);
+
+        // duration is NaN until metadata arrives; resume only once we can
+        // evaluate the near-end rule and the seek will actually stick.
+        el.addEventListener('loadedmetadata', function () {
+            if (trackState) trackState.duration = isFinite(el.duration) ? Math.floor(el.duration) : 0;
+            applyResume(adapter, 'file', fileId);
+        }, { once: true });
     }
 
     let trackState = null;
