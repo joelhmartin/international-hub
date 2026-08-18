@@ -199,6 +199,7 @@ Pure logic for "what position is worth remembering" and "is this position too ol
   - `Anchor_FM_Watch_Math::RESUME_MIN_SECONDS` = `10`
   - `Anchor_FM_Watch_Math::RESUME_END_PAD_SECONDS` = `15`
   - `Anchor_FM_Watch_Math::RESUME_TTL_DAYS` = `30`
+  - `Anchor_FM_Watch_Math::SECONDS_PER_DAY` = `86400`
   - `Anchor_FM_Watch_Math::resume_point(int $point_seconds, int $duration_seconds, bool $ended) : int`
   - `Anchor_FM_Watch_Math::is_resume_stale(string $last_viewed_at, int $now_ts, int $ttl_days = 30) : bool`
 
@@ -257,6 +258,13 @@ In `includes/class-afm-watch-math.php`, add these constants next to the existing
 
     /** How long a saved position survives without being touched. */
     const RESUME_TTL_DAYS = 30;
+
+    /**
+     * WordPress defines DAY_IN_SECONDS, but tests/run.php has no WP bootstrap.
+     * A class constant keeps the math identical in both environments without
+     * polluting the global namespace.
+     */
+    const SECONDS_PER_DAY = 86400;
 ```
 
 Then add these two methods to the class, after `apply_progress()`:
@@ -313,16 +321,8 @@ Then add these two methods to the class, after `apply_progress()`:
         $ts = strtotime($last_viewed_at);
         if ($ts === false) return true;
 
-        return ((int) $now_ts - $ts) > ((int) $ttl_days * DAY_IN_SECONDS_AFM);
+        return ((int) $now_ts - $ts) > ((int) $ttl_days * self::SECONDS_PER_DAY);
     }
-```
-
-The test runner has no WordPress, so `DAY_IN_SECONDS` is undefined there. Add this guarded constant at the top of `includes/class-afm-watch-math.php`, immediately after the ABSPATH guard:
-
-```php
-if (!defined('DAY_IN_SECONDS_AFM')) {
-    define('DAY_IN_SECONDS_AFM', 86400);
-}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
