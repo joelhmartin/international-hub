@@ -7,6 +7,22 @@ class Anchor_FM_Watch_Math {
 
     const MAX_BEAT_SECONDS = 60; // clamp per-heartbeat watched-delta
 
+    /** Positions below this are not worth remembering. */
+    const RESUME_MIN_SECONDS = 10;
+
+    /** This close to the end counts as finished — resuming here is worse than restarting. */
+    const RESUME_END_PAD_SECONDS = 15;
+
+    /** How long a saved position survives without being touched. */
+    const RESUME_TTL_DAYS = 30;
+
+    /**
+     * WordPress defines DAY_IN_SECONDS, but tests/run.php has no WP bootstrap.
+     * A class constant keeps the math identical in both environments without
+     * polluting the global namespace.
+     */
+    const SECONDS_PER_DAY = 86400;
+
     /**
      * Fold one progress heartbeat into an existing view record.
      *
@@ -47,5 +63,59 @@ class Anchor_FM_Watch_Math {
             'total_seconds'    => $total,
             'percent'          => $percent,
         ];
+    }
+
+    /**
+     * The playhead position worth storing for resume, or 0 for "start over".
+     *
+     * Deliberately separate from furthest_seconds: resume answers "where did
+     * you stop", furthest answers "how far did you ever get". Rewinding and
+     * quitting must not read as completion in the watch report.
+     *
+     * @param int  $point_seconds    current playhead
+     * @param int  $duration_seconds total length, 0 when unknown
+     * @param bool $ended            player fired its ended event
+     * @return int
+     */
+    public static function resume_point($point_seconds, $duration_seconds, $ended) {
+        if ($ended) return 0;
+
+        $point    = max(0, (int) $point_seconds);
+        $duration = max(0, (int) $duration_seconds);
+
+        if ($duration > 0 && $point > $duration) {
+            $point = $duration;
+        }
+        if ($point < self::RESUME_MIN_SECONDS) return 0;
+
+        // Unknown duration means the end-pad rule cannot be evaluated; keep
+        // the position rather than silently discarding it.
+        if ($duration > 0 && $point >= ($duration - self::RESUME_END_PAD_SECONDS)) {
+            return 0;
+        }
+        return $point;
+    }
+
+    /**
+     * Whether a stored position has aged out. Fails closed: anything we cannot
+     * parse is treated as stale, so a bad timestamp can never pin a position
+     * open forever.
+     *
+     * Exactly $ttl_days old is NOT stale; one second older is.
+     *
+     * @param string $last_viewed_at MySQL datetime in WordPress local time
+     * @param int    $now_ts         timestamp in the SAME clock, i.e. current_time('timestamp')
+     * @param int    $ttl_days
+     * @return bool
+     */
+    public static function is_resume_stale($last_viewed_at, $now_ts, $ttl_days = self::RESUME_TTL_DAYS) {
+        if (!is_string($last_viewed_at)) return true;
+        $last_viewed_at = trim($last_viewed_at);
+        if ($last_viewed_at === '' || strpos($last_viewed_at, '0000-00-00') === 0) return true;
+
+        $ts = strtotime($last_viewed_at);
+        if ($ts === false) return true;
+
+        return ((int) $now_ts - $ts) > ((int) $ttl_days * self::SECONDS_PER_DAY);
     }
 }

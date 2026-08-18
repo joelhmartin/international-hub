@@ -284,5 +284,36 @@ check('range start past EOF', Anchor_FM_Range::parse('bytes=5000-', 5000),
 check('range start well past EOF', Anchor_FM_Range::parse('bytes=99999-100000', 5000),
     ['satisfiable' => false]);
 
+// --- Anchor_FM_Watch_Math::resume_point ---
+check('resume normal midpoint', Anchor_FM_Watch_Math::resume_point(300, 1200, false), 300);
+check('resume below minimum', Anchor_FM_Watch_Math::resume_point(9, 1200, false), 0);
+check('resume at minimum kept', Anchor_FM_Watch_Math::resume_point(10, 1200, false), 10);
+check('resume ended clears', Anchor_FM_Watch_Math::resume_point(300, 1200, true), 0);
+check('resume within end pad', Anchor_FM_Watch_Math::resume_point(1190, 1200, false), 0);
+check('resume exactly at end pad', Anchor_FM_Watch_Math::resume_point(1185, 1200, false), 0);
+check('resume just before end pad', Anchor_FM_Watch_Math::resume_point(1184, 1200, false), 1184);
+check('resume past duration clamps then pads to zero', Anchor_FM_Watch_Math::resume_point(9999, 1200, false), 0);
+check('resume negative point', Anchor_FM_Watch_Math::resume_point(-5, 1200, false), 0);
+// Duration 0 means the player never reported a length. The end-pad rule cannot
+// apply, so we keep whatever position we have.
+check('resume unknown duration keeps point', Anchor_FM_Watch_Math::resume_point(300, 0, false), 300);
+check('resume unknown duration below minimum', Anchor_FM_Watch_Math::resume_point(4, 0, false), 0);
+// A video shorter than the end pad is always "finished" wherever you stop.
+check('resume very short video', Anchor_FM_Watch_Math::resume_point(11, 12, false), 0);
+
+// --- Anchor_FM_Watch_Math::is_resume_stale ---
+$afm_now = strtotime('2026-08-17 12:00:00');
+check('stale 29 days is fresh', Anchor_FM_Watch_Math::is_resume_stale('2026-07-19 12:00:00', $afm_now), false);
+check('stale 1 day is fresh', Anchor_FM_Watch_Math::is_resume_stale('2026-08-16 12:00:00', $afm_now), false);
+// Boundary: exactly 30 days old is still returned; 30 days plus a second is not.
+check('stale exactly 30 days is fresh', Anchor_FM_Watch_Math::is_resume_stale('2026-07-18 12:00:00', $afm_now), false);
+check('stale 30 days plus a second', Anchor_FM_Watch_Math::is_resume_stale('2026-07-18 11:59:59', $afm_now), true);
+check('stale 31 days', Anchor_FM_Watch_Math::is_resume_stale('2026-07-17 12:00:00', $afm_now), true);
+// Fail closed on anything we cannot read.
+check('stale empty string', Anchor_FM_Watch_Math::is_resume_stale('', $afm_now), true);
+check('stale zero date', Anchor_FM_Watch_Math::is_resume_stale('0000-00-00 00:00:00', $afm_now), true);
+check('stale garbage', Anchor_FM_Watch_Math::is_resume_stale('not a date', $afm_now), true);
+check('stale custom ttl', Anchor_FM_Watch_Math::is_resume_stale('2026-08-10 12:00:00', $afm_now, 5), true);
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
