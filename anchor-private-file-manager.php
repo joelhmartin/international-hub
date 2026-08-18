@@ -26,6 +26,7 @@ class Anchor_Private_File_Manager {
      */
     const VIMEO_BULK_MAX = 50;
     const OPT_DB_VERSION = 'anchor_fm_db_version';
+    const CRON_PRUNE_RESUME = 'anchor_fm_prune_resume';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
     const META_PRODUCT_DOCS = '_anchor_pd_docs';
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
@@ -92,7 +93,13 @@ class Anchor_Private_File_Manager {
         add_action('admin_menu', [$this, 'register_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
 
+        add_action(self::CRON_PRUNE_RESUME, [$this, 'cron_prune_resume']);
+
         $this->maybe_upgrade_db();
+
+        if (!wp_next_scheduled(self::CRON_PRUNE_RESUME)) {
+            wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', self::CRON_PRUNE_RESUME);
+        }
     }
 
     public function bootstrap_update_checker() {
@@ -337,6 +344,14 @@ class Anchor_Private_File_Manager {
         self::ensure_product_docs_folder();
         self::ensure_links_table();
         self::ensure_videos_table();
+
+        if (!wp_next_scheduled(self::CRON_PRUNE_RESUME)) {
+            wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', self::CRON_PRUNE_RESUME);
+        }
+    }
+
+    public static function deactivate() {
+        wp_clear_scheduled_hook(self::CRON_PRUNE_RESUME);
     }
 
     private static function ensure_upload_storage() {
@@ -2449,6 +2464,33 @@ class Anchor_Private_File_Manager {
         ]);
     }
 
+    /**
+     * Zero out playback positions that have aged past the TTL.
+     *
+     * Housekeeping only — the authoritative expiry is the staleness check on
+     * the read path, because WP-Cron fires on page loads and a private portal
+     * can go untouched for weeks.
+     *
+     * Batched so a large table is never held under one long write lock.
+     */
+    public function cron_prune_resume() {
+        global $wpdb;
+        $views = self::table('video_views');
+        $ttl   = (int) Anchor_FM_Watch_Math::RESUME_TTL_DAYS;
+        $batch = 5000;
+
+        for ($i = 0; $i < 10; $i++) {
+            $affected = $wpdb->query($wpdb->prepare(
+                "UPDATE {$views} SET resume_seconds = 0
+                 WHERE resume_seconds > 0
+                   AND last_viewed_at < DATE_SUB(%s, INTERVAL %d DAY)
+                 LIMIT %d",
+                current_time('mysql'), $ttl, $batch
+            ));
+            if ($affected === false || (int) $affected < $batch) break;
+        }
+    }
+
     public function ajax_vimeo_history() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -3696,4 +3738,5 @@ class Anchor_Private_File_Manager {
 }
 
 register_activation_hook(__FILE__, ['Anchor_Private_File_Manager', 'activate']);
+register_deactivation_hook(__FILE__, ['Anchor_Private_File_Manager', 'deactivate']);
 Anchor_Private_File_Manager::instance();
