@@ -845,6 +845,10 @@ jQuery(function ($) {
 
     let trackState = null;
     let activeAdapter = null;
+    // Bumped on every mount; lets async callbacks (getDuration, the resume
+    // fetch) detect that the mount they belong to has since been torn down
+    // and a different one is now live, so they don't write into it.
+    let mountSeq = 0;
 
     // Vimeo's SDK and HTMLMediaElement expose the same four things under
     // different names. One adapter each keeps the heartbeat logic single-copy.
@@ -872,6 +876,7 @@ jQuery(function ($) {
     }
 
     function startMediaTracking(adapter, source, itemId) {
+        const token = ++mountSeq;
         trackState = {
             source: source,
             itemId: itemId,
@@ -880,10 +885,16 @@ jQuery(function ($) {
             duration: 0,
             newSession: true,
             ended: false,
+            token: token,
         };
         activeAdapter = adapter;
 
-        adapter.getDuration().then(d => { if (trackState) trackState.duration = d || 0; });
+        adapter.getDuration().then(d => {
+            // The mount that started this fetch may already be torn down
+            // (or replaced by a newer mount) by the time it resolves.
+            if (!trackState || trackState.token !== token) return;
+            trackState.duration = d || 0;
+        });
 
         adapter.onTimeUpdate(function (t) {
             if (!trackState) return;
@@ -924,28 +935,34 @@ jQuery(function ($) {
     // Seek to the user's saved position and tell them we did. A silent jump
     // into the middle of a video reads as a bug.
     function applyResume(adapter, source, itemId) {
+        // Captured at call time (this runs synchronously right after
+        // startMediaTracking, so trackState is this mount's state) so the
+        // async response below can tell whether its mount is still live.
+        const token = trackState ? trackState.token : null;
         api('anchor_fm_media_resume', { source: source, item_id: itemId })
             .done(res => {
+                // The modal may have closed (or a different video opened)
+                // while this request was in flight — don't let a stale
+                // response touch whatever session is live now.
+                if (!trackState || trackState.token !== token) return;
                 if (!res || !res.success) return;
                 const sec = Number(res.data.resumeSeconds) || 0;
                 if (sec <= 0) return;
 
                 adapter.seek(sec);
-                if (trackState) trackState.lastTime = sec;
+                trackState.lastTime = sec;
 
                 renderResumeBar(sec, function () {
+                    if (!trackState || trackState.token !== token) return;
                     adapter.seek(0);
-                    if (trackState) {
-                        trackState.lastTime = 0;
-                        trackState.accum = 0;
-                        // Persist the reset immediately, so closing without
-                        // watching does not restore the old position.
-                        api('anchor_fm_media_progress', {
-                            source: source, item_id: itemId,
-                            point: 0, delta: 0, duration: trackState.duration,
-                            ended: 0, new_session: 0,
-                        });
-                    }
+                    trackState.lastTime = 0;
+                    trackState.accum = 0;
+                    trackState.ended = false;
+                    // Reuses the shared payload builder so the reset also
+                    // clears newSession/ended consistently, and persists
+                    // immediately so closing without watching does not
+                    // restore the old position.
+                    flushProgress(true);
                 });
             });
     }
