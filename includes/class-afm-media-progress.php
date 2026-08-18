@@ -23,6 +23,12 @@ class Anchor_FM_Media_Progress {
     /**
      * Fold one heartbeat into the user's row, creating it if needed.
      *
+     * @param bool   $reset Explicit "Start over": the caller intends to write a
+     *                      zero position. Without it, an empty heartbeat
+     *                      (point 0, delta 0, duration 0 — what a modal closed
+     *                      before `loadedmetadata` produces) is discarded
+     *                      rather than allowed to overwrite a real saved
+     *                      position and zero the admin watch percentage.
      * @param string $now MySQL datetime from current_time('mysql')
      * @return bool `false` only when the underlying `$wpdb->insert()` /
      *              `$wpdb->update()` call itself returned exactly `false`
@@ -36,8 +42,22 @@ class Anchor_FM_Media_Progress {
      *              `0 == false` in PHP, so `!$result` would wrongly flag
      *              every no-op heartbeat as a failed save.
      */
-    public static function record($table, $source, $item_id, $user_id, $point, $delta, $duration, $ended, $is_new_session, $now) {
+    public static function record($table, $source, $item_id, $user_id, $point, $delta, $duration, $ended, $is_new_session, $now, $reset = false) {
         global $wpdb;
+
+        // A heartbeat that carries no information is not a save. This is the
+        // shape produced by opening and closing a video before metadata
+        // arrives; writing it would set resume_seconds to 0 and, with
+        // duration still 0, percent to 0 — clobbering a user who was at 87%
+        // while furthest_seconds kept the real value, so the report would
+        // contradict its own source data. "Start over" ($reset) and finishing
+        // ($ended) are real events and still write; so is a genuine
+        // watch-from-zero, which always carries $delta > 0.
+        $point = max(0, (int) $point);
+        $delta = max(0, (int) $delta);
+        if ($point <= 0 && $delta <= 0 && !$ended && !$reset) {
+            return true; // nothing to record, and not a failure
+        }
 
         $existing = $wpdb->get_row($wpdb->prepare(
             "SELECT furthest_seconds, total_seconds, sessions FROM {$table}

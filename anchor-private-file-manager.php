@@ -338,12 +338,15 @@ class Anchor_Private_File_Manager {
             add_option(self::OPT_EMAIL_ON_UPLOAD, 0);
         }
 
-        update_option(self::OPT_DB_VERSION, self::VERSION);
-
         self::ensure_upload_storage();
         self::ensure_product_docs_folder();
         self::ensure_links_table();
-        self::ensure_videos_table();
+        // Bump only after the schema work, and only if it succeeded — see
+        // maybe_upgrade_db(). A premature bump strands the site on the legacy
+        // (video_id, user_id) unique key with no retry.
+        if (self::ensure_videos_table()) {
+            update_option(self::OPT_DB_VERSION, self::VERSION);
+        }
 
         if (!wp_next_scheduled(self::CRON_PRUNE_RESUME)) {
             wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', self::CRON_PRUNE_RESUME);
@@ -420,6 +423,27 @@ class Anchor_Private_File_Manager {
         ");
     }
 
+    /**
+     * Whether a named index currently exists on the video_views table.
+     * Used both to gate dropping the legacy key and to decide whether the
+     * stored db version may advance.
+     */
+    private static function views_index_exists($index_name) {
+        global $wpdb;
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM information_schema.STATISTICS
+             WHERE table_schema = DATABASE() AND table_name = %s AND index_name = %s",
+            self::table('video_views'), $index_name
+        )) > 0;
+    }
+
+    /**
+     * @return bool True when the (source, video_id, user_id) unique key exists
+     *              after this call. False means dbDelta did not manage to add
+     *              it on this host, and the caller MUST NOT record the upgrade
+     *              as done -- otherwise the migration never retries and every
+     *              file-source progress write collides with the legacy key.
+     */
     private static function ensure_videos_table() {
         global $wpdb;
         $charset_collate = $wpdb->get_charset_collate();
@@ -464,7 +488,7 @@ class Anchor_Private_File_Manager {
             ) {$charset_collate};
         ");
 
-        self::drop_legacy_views_key();
+        return self::drop_legacy_views_key();
     }
 
     /**
@@ -474,34 +498,34 @@ class Anchor_Private_File_Manager {
      * wrongly forbid a file row and a Vimeo row that happen to share an id.
      * Runs only after dbDelta has created the replacement, so the table is
      * never left without a uniqueness guard. Idempotent — safe to run twice.
+     *
+     * @return bool Whether source_video_user exists, i.e. whether the schema
+     *              migration actually landed.
      */
     private static function drop_legacy_views_key() {
         global $wpdb;
         $views = self::table('video_views');
 
-        $has_new = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(1) FROM information_schema.STATISTICS
-             WHERE table_schema = DATABASE() AND table_name = %s AND index_name = 'source_video_user'",
-            $views
-        ));
-        if ($has_new < 1) return; // replacement missing — leave the old key alone
+        if (!self::views_index_exists('source_video_user')) {
+            return false; // replacement missing — leave the old key alone
+        }
 
-        $has_old = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(1) FROM information_schema.STATISTICS
-             WHERE table_schema = DATABASE() AND table_name = %s AND index_name = 'video_user'",
-            $views
-        ));
-        if ($has_old > 0) {
+        if (self::views_index_exists('video_user')) {
             $wpdb->query("ALTER TABLE {$views} DROP INDEX video_user");
         }
+        return true;
     }
 
     private function maybe_upgrade_db() {
         $installed = (string) get_option(self::OPT_DB_VERSION, '0');
         if (version_compare($installed, self::VERSION, '<')) {
             self::ensure_links_table();
-            self::ensure_videos_table();
-            update_option(self::OPT_DB_VERSION, self::VERSION);
+            // Only record the upgrade when the schema change actually landed.
+            // A host where dbDelta fails to add source_video_user must retry
+            // on the next load rather than be stranded with the legacy key.
+            if (self::ensure_videos_table()) {
+                update_option(self::OPT_DB_VERSION, self::VERSION);
+            }
         }
     }
 
@@ -1846,6 +1870,14 @@ class Anchor_Private_File_Manager {
                     ["DELETE FROM {$perms_table} WHERE entity_type = 'file' AND entity_id IN ({$fph})"],
                     $file_ids
                 )));
+
+                // Uploaded video files carry watch history too; prune it with
+                // the same source discriminator so Vimeo rows are untouched.
+                $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
+                    ["DELETE FROM {$video_views_table} WHERE source = %s AND video_id IN ({$fph})"],
+                    [Anchor_FM_Media_Progress::SOURCE_FILE],
+                    $file_ids
+                )));
             }
 
             $dph = implode(',', array_fill(0, count($folder_ids), '%d'));
@@ -1867,8 +1899,12 @@ class Anchor_Private_File_Manager {
             )));
             if ($video_ids) {
                 $vph = implode(',', array_fill(0, count($video_ids), '%d'));
+                // source is load-bearing: without it this also deletes the
+                // watch history of uploaded files whose files.id collides
+                // with one of these videos.id values.
                 $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
-                    ["DELETE FROM {$video_views_table} WHERE video_id IN ({$vph})"],
+                    ["DELETE FROM {$video_views_table} WHERE source = %s AND video_id IN ({$vph})"],
+                    [Anchor_FM_Media_Progress::SOURCE_VIMEO],
                     array_map('intval', $video_ids)
                 )));
                 $wpdb->query(call_user_func_array([$wpdb, 'prepare'], array_merge(
@@ -2056,6 +2092,14 @@ class Anchor_Private_File_Manager {
         $perms_table = self::table('permissions');
         $wpdb->delete($files_table, ['id' => $file_id], ['%d']);
         $wpdb->delete($perms_table, ['entity_type' => 'file', 'entity_id' => $file_id], ['%s','%d']);
+        // Uploaded videos accumulate watch history under source='file'.
+        // Without this the rows outlive the file forever, keyed to an id
+        // that will eventually be reused.
+        $wpdb->delete(
+            self::table('video_views'),
+            ['source' => Anchor_FM_Media_Progress::SOURCE_FILE, 'video_id' => $file_id],
+            ['%s','%d']
+        );
 
         $this->log_activity($user_id, 'delete_file', 'file', $file_id, ['name' => $file->original_name]);
         $this->json_success(['fileId' => $file_id]);
@@ -2380,7 +2424,16 @@ class Anchor_Private_File_Manager {
         global $wpdb;
         $videos = self::table('videos');
         $views = self::table('video_views');
-        $wpdb->delete($views, ['video_id' => $video_id], ['%d']);
+        // video_views.video_id is polysemous: it holds a videos.id OR a
+        // files.id, told apart only by source. Deleting on video_id alone
+        // would wipe the watch history of the uploaded file that happens to
+        // share this id -- the two tables auto-increment independently, so
+        // low ids overlap almost completely.
+        $wpdb->delete(
+            $views,
+            ['source' => Anchor_FM_Media_Progress::SOURCE_VIMEO, 'video_id' => $video_id],
+            ['%s','%d']
+        );
         $wpdb->delete($videos, ['id' => $video_id], ['%d']);
         $this->log_activity($user_id, 'delete_video', 'video', $video_id, null);
         $this->json_success(['videoId' => $video_id]);
@@ -2417,7 +2470,8 @@ class Anchor_Private_File_Manager {
             isset($_POST['duration']) ? (int) $_POST['duration'] : 0,
             !empty($_POST['ended']),
             !empty($_POST['new_session']),
-            current_time('mysql')
+            current_time('mysql'),
+            !empty($_POST['reset'])
         );
 
         if ($saved === false) $this->json_error('Could not save progress', 500);
@@ -2945,7 +2999,9 @@ class Anchor_Private_File_Manager {
         // Discard WordPress's output buffering, or the body accumulates in
         // memory instead of streaming.
         while (ob_get_level() > 0) { @ob_end_clean(); }
-        @set_time_limit(0);
+        // Finite, not unlimited: a stalled client must not pin a PHP worker
+        // forever. 300s is far more than any single 256KB-chunked range needs.
+        @set_time_limit(300);
 
         $requested = ($end - $start) + 1;
 
@@ -3034,10 +3090,13 @@ class Anchor_Private_File_Manager {
         $raw_range = isset($_SERVER['HTTP_RANGE']) ? (string) $_SERVER['HTTP_RANGE'] : '';
         $range = Anchor_FM_Range::parse($raw_range, $size);
 
-        // One playthrough issues dozens of range requests. Log only the
-        // opening one, or the activity table fills with noise.
+        // One inline playthrough issues dozens of range requests, so for
+        // previews log only the opening one or the activity table fills with
+        // noise. Attachments are NOT deduplicated: they generate no range
+        // storm, and suppressing them would let `Range: bytes=1-` pull a whole
+        // document with zero download_file rows -- an audit-trail hole.
         $is_opening = ($range === null) || (isset($range['start']) && (int) $range['start'] === 0);
-        if ($is_opening) {
+        if ($disp === 'attachment' || $is_opening) {
             $this->log_activity($user_id, $disp === 'inline' ? 'preview_file' : 'download_file', 'file', $file_id, []);
         }
 

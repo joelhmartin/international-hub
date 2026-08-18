@@ -300,6 +300,14 @@ check('resume unknown duration keeps point', Anchor_FM_Watch_Math::resume_point(
 check('resume unknown duration below minimum', Anchor_FM_Watch_Math::resume_point(4, 0, false), 0);
 // A video shorter than the end pad is always "finished" wherever you stop.
 check('resume very short video', Anchor_FM_Watch_Math::resume_point(11, 12, false), 0);
+// Unknown duration cannot clamp against length, so a hostile/buggy client
+// could otherwise post a value too large for the INT(10) UNSIGNED column.
+check('resume unknown duration clamps at 24h', Anchor_FM_Watch_Math::resume_point(999999999, 0, false), 86400);
+check('resume unknown duration at clamp boundary', Anchor_FM_Watch_Math::resume_point(86400, 0, false), 86400);
+check('resume unknown duration just under clamp', Anchor_FM_Watch_Math::resume_point(86399, 0, false), 86399);
+// The clamp applies after the duration clamp, so a long-but-known duration
+// still resumes normally below 24h.
+check('resume clamp does not disturb known duration', Anchor_FM_Watch_Math::resume_point(4000, 7200, false), 4000);
 
 // --- Anchor_FM_Watch_Math::is_resume_stale ---
 $afm_now = strtotime('2026-08-17 12:00:00');

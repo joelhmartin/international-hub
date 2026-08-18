@@ -872,30 +872,51 @@ jQuery(function ($) {
         // .mov is on the upload allow-list but Firefox generally will not play
         // it. Rather than leaving a dead black box, fall back to exactly the
         // pre-player behaviour: the no-preview block plus Download.
+        //
+        // This also fires for a mid-playback network failure (dropped wifi,
+        // worker timeout, expired stream nonce) 40 minutes in, so it must not
+        // assume "unsupported format" and must not throw away the accumulated
+        // position on the way out.
         el.addEventListener('error', function () {
-            const dl = downloadUrl
-                ? `<a class="afm__btn afm__btn--primary" href="${esc(downloadUrl)}"><span class="dashicons dashicons-download"></span> Download</a>`
-                : '';
-            $(el).closest('.afm__viewerStage').replaceWith(
-                `<div class="afm__viewerNone">
-                    <span class="dashicons dashicons-format-video"></span>
-                    <div>This video can't be played in your browser.</div>
-                    <div class="afm__viewerNoneAction">${dl}</div>
-                </div>`
-            );
-            // Only clear shared tracking state if it still belongs to this
+            // Only act on shared tracking state if it still belongs to this
             // mount — a stale error from a closed/replaced modal must not
-            // null out a different, currently-live video's state.
+            // flush into, or null out, a different currently-live video.
             if (trackState && trackState.token === token) {
+                // Persist before tearing down, or the watched time and
+                // playhead accumulated so far are simply lost: closeModal
+                // finds null state and flushes nothing.
+                flushProgress(true);
                 trackState = null;
                 activeAdapter = null;
             }
+
+            const code = (el.error && el.error.code) || 0;
+            // 4 = MEDIA_ERR_SRC_NOT_SUPPORTED, 3 = MEDIA_ERR_DECODE: the file
+            // genuinely will not play here. 2 = MEDIA_ERR_NETWORK: it would
+            // have played; the connection died.
+            const isNetwork = code === 2;
+            if (!isNetwork && code !== 4 && code !== 3) return;
+
+            const dl = downloadUrl
+                ? `<a class="afm__btn afm__btn--primary" href="${esc(downloadUrl)}"><span class="dashicons dashicons-download"></span> Download</a>`
+                : '';
+            const msg = isNetwork
+                ? 'Playback stopped — the connection to the server was lost.'
+                : "This video can't be played in your browser.";
+            $(el).closest('.afm__viewerStage').replaceWith(
+                `<div class="afm__viewerNone">
+                    <span class="dashicons dashicons-format-video"></span>
+                    <div>${esc(msg)}</div>
+                    <div class="afm__viewerNoneAction">${dl}</div>
+                </div>`
+            );
         }, { once: true });
 
         // duration is NaN until metadata arrives; resume only once we can
         // evaluate the near-end rule and the seek will actually stick.
         el.addEventListener('loadedmetadata', function () {
-            if (trackState) trackState.duration = isFinite(el.duration) ? Math.floor(el.duration) : 0;
+            if (!trackState || trackState.token !== token) return;
+            trackState.duration = isFinite(el.duration) ? Math.floor(el.duration) : 0;
             applyResume(adapter, 'file', fileId);
         }, { once: true });
     }
@@ -907,22 +928,27 @@ jQuery(function ($) {
     // and a different one is now live, so they don't write into it.
     let mountSeq = 0;
 
-    // Vimeo's SDK and HTMLMediaElement expose the same four things under
+    // Vimeo's SDK and HTMLMediaElement expose the same handful of things under
     // different names. One adapter each keeps the heartbeat logic single-copy.
+    // The two implementations must stay symmetric — that symmetry is the point.
     function vimeoAdapter(player) {
         return {
             onTimeUpdate: cb => player.on('timeupdate', d => cb(Math.floor((d && d.seconds) || 0))),
+            onPlay: cb => player.on('play', cb),
             onPause: cb => player.on('pause', cb),
             onEnded: cb => player.on('ended', cb),
             getDuration: () => player.getDuration().then(d => Math.floor(d || 0)).catch(() => 0),
-            seek: t => { try { player.setCurrentTime(t); } catch (e) {} },
-            unload: () => { try { if (player.unload) player.unload(); } catch (e) {} },
+            // These return promises: try/catch cannot see a rejection from a
+            // player that is not ready yet, so swallow it explicitly.
+            seek: t => { try { const p = player.setCurrentTime(t); if (p && p.catch) p.catch(() => {}); } catch (e) {} },
+            unload: () => { try { if (player.unload) { const p = player.unload(); if (p && p.catch) p.catch(() => {}); } } catch (e) {} },
         };
     }
 
     function nativeAdapter(el) {
         return {
             onTimeUpdate: cb => el.addEventListener('timeupdate', () => cb(Math.floor(el.currentTime || 0))),
+            onPlay: cb => el.addEventListener('play', cb),
             onPause: cb => el.addEventListener('pause', cb),
             onEnded: cb => el.addEventListener('ended', cb),
             // duration is NaN until metadata loads and Infinity for streams.
@@ -963,6 +989,14 @@ jQuery(function ($) {
             if (trackState.accum >= 10) flushProgress(false);
         });
 
+        // Re-watching a finished video must not keep reporting ended=1 — the
+        // server returns resume 0 for an ended beat, so without this the
+        // whole second viewing saves no position at all.
+        adapter.onPlay(function () {
+            if (!trackState || trackState.token !== token) return;
+            trackState.ended = false;
+        });
+
         adapter.onPause(function () { flushProgress(false); });
 
         adapter.onEnded(function () {
@@ -971,7 +1005,10 @@ jQuery(function ($) {
         });
     }
 
-    function flushProgress(force) {
+    // `reset` marks a deliberate "Start over": the server treats a zero
+    // position as intentional rather than as the empty heartbeat a
+    // closed-before-metadata modal produces, which it otherwise discards.
+    function flushProgress(force, reset) {
         if (!trackState) return;
         if (!force && trackState.accum <= 0) return;
 
@@ -983,6 +1020,7 @@ jQuery(function ($) {
             duration: trackState.duration,
             ended: trackState.ended ? 1 : 0,
             new_session: trackState.newSession ? 1 : 0,
+            reset: reset ? 1 : 0,
         };
         trackState.accum = 0;
         trackState.newSession = false;
@@ -1018,8 +1056,9 @@ jQuery(function ($) {
                     // Reuses the shared payload builder so the reset also
                     // clears newSession/ended consistently, and persists
                     // immediately so closing without watching does not
-                    // restore the old position.
-                    flushProgress(true);
+                    // restore the old position. reset=1 is what tells the
+                    // server this zero is intentional.
+                    flushProgress(true, true);
                 });
             });
     }

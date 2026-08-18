@@ -16,6 +16,10 @@ class Anchor_FM_Watch_Math {
     /** How long a saved position survives without being touched. */
     const RESUME_TTL_DAYS = 30;
 
+    /** Upper bound on a stored playhead — 24h. Guards the INT(10) UNSIGNED
+     *  column when duration is unknown and the per-duration clamp cannot fire. */
+    const RESUME_MAX_SECONDS = 86400;
+
     /**
      * WordPress defines DAY_IN_SECONDS, but tests/run.php has no WP bootstrap.
      * A class constant keeps the math identical in both environments without
@@ -86,6 +90,11 @@ class Anchor_FM_Watch_Math {
         if ($duration > 0 && $point > $duration) {
             $point = $duration;
         }
+        // With duration unknown the clamp above cannot fire, so a client is
+        // otherwise free to post an arbitrarily large point straight into an
+        // INT(10) UNSIGNED column and make its own row fail under strict mode.
+        // No legitimate playhead exceeds a day.
+        $point = min($point, self::RESUME_MAX_SECONDS);
         if ($point < self::RESUME_MIN_SECONDS) return 0;
 
         // Unknown duration means the end-pad rule cannot be evaluated; keep
