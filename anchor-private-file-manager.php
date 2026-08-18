@@ -9,6 +9,7 @@
 if (!defined('ABSPATH')) exit;
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-media-progress.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
@@ -68,6 +69,8 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_vimeo_update', [$this, 'ajax_vimeo_update']);
         add_action('wp_ajax_anchor_fm_vimeo_delete', [$this, 'ajax_vimeo_delete']);
         add_action('wp_ajax_anchor_fm_vimeo_progress', [$this, 'ajax_vimeo_progress']);
+        add_action('wp_ajax_anchor_fm_media_progress', [$this, 'ajax_media_progress']);
+        add_action('wp_ajax_anchor_fm_media_resume', [$this, 'ajax_media_resume']);
         add_action('wp_ajax_anchor_fm_vimeo_history', [$this, 'ajax_vimeo_history']);
         add_action('wp_ajax_anchor_fm_request_access', [$this, 'ajax_request_access']);
 
@@ -2368,57 +2371,80 @@ class Anchor_Private_File_Manager {
         $this->json_success(['videoId' => $video_id]);
     }
 
+    /**
+     * Resolve and authorize a (source, item) pair for the current user.
+     * Sends a JSON error and exits on anything invalid.
+     */
+    private function require_media_access($source, $item_id, $user_id) {
+        if (!Anchor_FM_Media_Progress::valid_source($source)) $this->json_error('Bad source');
+        if ($item_id <= 0) $this->json_error('Missing item_id');
+
+        $ok = ($source === Anchor_FM_Media_Progress::SOURCE_VIMEO)
+            ? $this->can_user_view_video($user_id, $item_id)
+            : $this->can_user_view_file($user_id, $item_id);
+
+        if (!$ok) $this->json_error('Forbidden', 403);
+    }
+
+    private function handle_progress($source, $item_id) {
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        $user_id = get_current_user_id();
+
+        $this->require_media_access($source, $item_id, $user_id);
+
+        Anchor_FM_Media_Progress::record(
+            self::table('video_views'),
+            $source,
+            $item_id,
+            $user_id,
+            isset($_POST['point']) ? (int) $_POST['point'] : 0,
+            isset($_POST['delta']) ? (int) $_POST['delta'] : 0,
+            isset($_POST['duration']) ? (int) $_POST['duration'] : 0,
+            !empty($_POST['ended']),
+            !empty($_POST['new_session']),
+            current_time('mysql')
+        );
+
+        $this->json_success(['saved' => true]);
+    }
+
+    public function ajax_media_progress() {
+        $this->require_nonce();
+        $source  = isset($_POST['source']) ? sanitize_key((string) $_POST['source']) : '';
+        $item_id = isset($_POST['item_id']) ? (int) $_POST['item_id'] : 0;
+        $this->handle_progress($source, $item_id);
+    }
+
+    /**
+     * Back-compat shim. file-manager.js is cache-busted by filemtime, but a
+     * browser holding the old bundle across a plugin update would otherwise
+     * fail every heartbeat. Remove one release after 2.11.0.
+     */
     public function ajax_vimeo_progress() {
+        $this->require_nonce();
+        $item_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
+        $this->handle_progress(Anchor_FM_Media_Progress::SOURCE_VIMEO, $item_id);
+    }
+
+    public function ajax_media_resume() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
         $user_id = get_current_user_id();
 
-        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
-        $point = isset($_POST['point']) ? (int) $_POST['point'] : 0;
-        $delta = isset($_POST['delta']) ? (int) $_POST['delta'] : 0;
-        $duration = isset($_POST['duration']) ? (int) $_POST['duration'] : 0;
-        $is_new_session = !empty($_POST['new_session']);
+        $source  = isset($_POST['source']) ? sanitize_key((string) $_POST['source']) : '';
+        $item_id = isset($_POST['item_id']) ? (int) $_POST['item_id'] : 0;
 
-        if ($video_id <= 0) $this->json_error('Missing video_id');
-        if (!$this->can_user_view_video($user_id, $video_id)) $this->json_error('Forbidden', 403);
+        $this->require_media_access($source, $item_id, $user_id);
 
-        global $wpdb;
-        $views = self::table('video_views');
-        $now = current_time('mysql');
-
-        $existing = $wpdb->get_row($wpdb->prepare(
-            "SELECT furthest_seconds, total_seconds, sessions FROM {$views} WHERE video_id = %d AND user_id = %d",
-            $video_id, $user_id
-        ), ARRAY_A);
-
-        $merged = Anchor_FM_Watch_Math::apply_progress(
-            $existing ?: ['furthest_seconds' => 0, 'total_seconds' => 0],
-            $point, $delta, $duration
-        );
-
-        if ($existing) {
-            $sessions = (int) $existing['sessions'] + ($is_new_session ? 1 : 0);
-            $wpdb->update($views, [
-                'furthest_seconds' => $merged['furthest_seconds'],
-                'total_seconds' => $merged['total_seconds'],
-                'percent' => $merged['percent'],
-                'sessions' => $sessions,
-                'last_viewed_at' => $now,
-            ], ['video_id' => $video_id, 'user_id' => $user_id], ['%d','%d','%d','%d','%s'], ['%d','%d']);
-        } else {
-            $wpdb->insert($views, [
-                'video_id' => $video_id,
-                'user_id' => $user_id,
-                'furthest_seconds' => $merged['furthest_seconds'],
-                'total_seconds' => $merged['total_seconds'],
-                'percent' => $merged['percent'],
-                'sessions' => 1,
-                'first_viewed_at' => $now,
-                'last_viewed_at' => $now,
-            ], ['%d','%d','%d','%d','%d','%d','%s','%s']);
-        }
-
-        $this->json_success(['saved' => true]);
+        $this->json_success([
+            'resumeSeconds' => Anchor_FM_Media_Progress::read_resume(
+                self::table('video_views'),
+                $source,
+                $item_id,
+                $user_id,
+                current_time('timestamp')
+            ),
+        ]);
     }
 
     public function ajax_vimeo_history() {
