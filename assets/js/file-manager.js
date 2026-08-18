@@ -856,6 +856,15 @@ jQuery(function ($) {
         const el = document.getElementById('afmFPlayer_' + fileId);
         if (!el) return;
 
+        const adapter = nativeAdapter(el);
+        startMediaTracking(adapter, 'file', fileId);
+
+        // Captured after startMediaTracking stamps this mount's token, same as
+        // applyResume does — lets the error handler below detect that its
+        // mount has since been superseded (or torn down) and skip touching
+        // whatever session is live now.
+        const token = trackState ? trackState.token : null;
+
         // .mov is on the upload allow-list but Firefox generally will not play
         // it. Rather than leaving a dead black box, fall back to exactly the
         // pre-player behaviour: the no-preview block plus Download.
@@ -870,12 +879,14 @@ jQuery(function ($) {
                     <div class="afm__viewerNoneAction">${dl}</div>
                 </div>`
             );
-            trackState = null;
-            activeAdapter = null;
-        });
-
-        const adapter = nativeAdapter(el);
-        startMediaTracking(adapter, 'file', fileId);
+            // Only clear shared tracking state if it still belongs to this
+            // mount — a stale error from a closed/replaced modal must not
+            // null out a different, currently-live video's state.
+            if (trackState && trackState.token === token) {
+                trackState = null;
+                activeAdapter = null;
+            }
+        }, { once: true });
 
         // duration is NaN until metadata arrives; resume only once we can
         // evaluate the near-end rule and the seek will actually stick.
