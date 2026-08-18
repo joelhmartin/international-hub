@@ -2392,7 +2392,7 @@ class Anchor_Private_File_Manager {
 
         $this->require_media_access($source, $item_id, $user_id);
 
-        Anchor_FM_Media_Progress::record(
+        $saved = Anchor_FM_Media_Progress::record(
             self::table('video_views'),
             $source,
             $item_id,
@@ -2404,6 +2404,8 @@ class Anchor_Private_File_Manager {
             !empty($_POST['new_session']),
             current_time('mysql')
         );
+
+        if ($saved === false) $this->json_error('Could not save progress', 500);
 
         $this->json_success(['saved' => true]);
     }

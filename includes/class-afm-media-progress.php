@@ -24,6 +24,17 @@ class Anchor_FM_Media_Progress {
      * Fold one heartbeat into the user's row, creating it if needed.
      *
      * @param string $now MySQL datetime from current_time('mysql')
+     * @return bool `false` only when the underlying `$wpdb->insert()` /
+     *              `$wpdb->update()` call itself returned exactly `false`
+     *              (a genuine query failure, e.g. a strict-mode out-of-range
+     *              value). `true` otherwise — this includes the ordinary
+     *              case where `$wpdb->update()` returns integer `0` because
+     *              the WHERE matched a row but no column value actually
+     *              changed (a heartbeat where the playhead hasn't moved).
+     *              That `0` is ROUTINE SUCCESS, not failure, and must be
+     *              compared with `=== false`, never a loose/falsy check —
+     *              `0 == false` in PHP, so `!$result` would wrongly flag
+     *              every no-op heartbeat as a failed save.
      */
     public static function record($table, $source, $item_id, $user_id, $point, $delta, $duration, $ended, $is_new_session, $now) {
         global $wpdb;
@@ -42,7 +53,7 @@ class Anchor_FM_Media_Progress {
 
         if ($existing) {
             $sessions = (int) $existing['sessions'] + ($is_new_session ? 1 : 0);
-            $wpdb->update(
+            $result = $wpdb->update(
                 $table,
                 [
                     'furthest_seconds' => $merged['furthest_seconds'],
@@ -57,7 +68,7 @@ class Anchor_FM_Media_Progress {
                 ['%s','%d','%d']
             );
         } else {
-            $wpdb->insert(
+            $result = $wpdb->insert(
                 $table,
                 [
                     'source'           => $source,
@@ -74,6 +85,8 @@ class Anchor_FM_Media_Progress {
                 ['%s','%d','%d','%d','%d','%d','%d','%d','%s','%s']
             );
         }
+
+        return $result !== false;
     }
 
     /**
