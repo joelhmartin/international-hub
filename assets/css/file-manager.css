@@ -1418,3 +1418,39 @@
 .afm__importRow--created td:nth-child(4) { color: #1a7f37; font-weight: 600; }
 .afm__importRow--skipped td:nth-child(4) { color: #9a6700; font-weight: 600; }
 .afm__importRow--error td:nth-child(4) { color: #b32d2e; font-weight: 600; }
+
+/* Resume notice shown over a player that opened at a saved position. */
+.afm__resumeBar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #f1f5f9;
+    font-size: 13px;
+}
+.afm__resumeText { flex: 1 1 auto; }
+.afm__resumeReset {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid #64748b;
+    color: #f1f5f9;
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.afm__resumeReset:hover { background: #334155; }
+.afm__resumeClose {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 0;
+    color: #94a3b8;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+.afm__resumeClose:hover { color: #f1f5f9; }

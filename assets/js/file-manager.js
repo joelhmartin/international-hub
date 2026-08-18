@@ -837,45 +837,141 @@ jQuery(function ($) {
         // player only works where the domain is whitelisted on Vimeo.
         if (vimeoHash) opts.h = String(vimeoHash);
         activePlayer = new window.Vimeo.Player(elId, opts);
-        startVideoTracking(activePlayer, videoId);
+
+        const adapter = vimeoAdapter(activePlayer);
+        startMediaTracking(adapter, 'vimeo', videoId);
+        applyResume(adapter, 'vimeo', videoId);
     }
 
     let trackState = null;
+    let activeAdapter = null;
 
-    function startVideoTracking(player, videoId) {
-        trackState = { videoId: videoId, lastTime: 0, accum: 0, duration: 0, newSession: true };
-        player.getDuration().then(d => { trackState.duration = Math.floor(d || 0); }).catch(() => {});
+    // Vimeo's SDK and HTMLMediaElement expose the same four things under
+    // different names. One adapter each keeps the heartbeat logic single-copy.
+    function vimeoAdapter(player) {
+        return {
+            onTimeUpdate: cb => player.on('timeupdate', d => cb(Math.floor((d && d.seconds) || 0))),
+            onPause: cb => player.on('pause', cb),
+            onEnded: cb => player.on('ended', cb),
+            getDuration: () => player.getDuration().then(d => Math.floor(d || 0)).catch(() => 0),
+            seek: t => { try { player.setCurrentTime(t); } catch (e) {} },
+            unload: () => { try { if (player.unload) player.unload(); } catch (e) {} },
+        };
+    }
 
-        player.on('timeupdate', function (data) {
+    function nativeAdapter(el) {
+        return {
+            onTimeUpdate: cb => el.addEventListener('timeupdate', () => cb(Math.floor(el.currentTime || 0))),
+            onPause: cb => el.addEventListener('pause', cb),
+            onEnded: cb => el.addEventListener('ended', cb),
+            // duration is NaN until metadata loads and Infinity for streams.
+            getDuration: () => Promise.resolve(isFinite(el.duration) ? Math.floor(el.duration) : 0),
+            seek: t => { try { el.currentTime = t; } catch (e) {} },
+            unload: () => { try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} },
+        };
+    }
+
+    function startMediaTracking(adapter, source, itemId) {
+        trackState = {
+            source: source,
+            itemId: itemId,
+            lastTime: 0,
+            accum: 0,
+            duration: 0,
+            newSession: true,
+            ended: false,
+        };
+        activeAdapter = adapter;
+
+        adapter.getDuration().then(d => { if (trackState) trackState.duration = d || 0; });
+
+        adapter.onTimeUpdate(function (t) {
             if (!trackState) return;
-            const t = Math.floor(data.seconds || 0);
             const delta = t - trackState.lastTime;
+            // Guards against seek jumps counting as watched time. Native
+            // timeupdate fires ~4x/sec, so most deltas are 0 or 1.
             if (delta > 0 && delta <= 2) trackState.accum += delta;
             trackState.lastTime = t;
             if (trackState.accum >= 10) flushProgress(false);
         });
-        player.on('pause', function () { flushProgress(false); });
-        player.on('ended', function () { flushProgress(false); });
+
+        adapter.onPause(function () { flushProgress(false); });
+
+        adapter.onEnded(function () {
+            if (trackState) trackState.ended = true;
+            flushProgress(true);
+        });
     }
 
     function flushProgress(force) {
         if (!trackState) return;
         if (!force && trackState.accum <= 0) return;
+
         const payload = {
-            video_id: trackState.videoId,
+            source: trackState.source,
+            item_id: trackState.itemId,
             point: trackState.lastTime,
             delta: trackState.accum,
             duration: trackState.duration,
+            ended: trackState.ended ? 1 : 0,
             new_session: trackState.newSession ? 1 : 0,
         };
         trackState.accum = 0;
         trackState.newSession = false;
-        api('anchor_fm_vimeo_progress', payload);
+        api('anchor_fm_media_progress', payload);
+    }
+
+    // Seek to the user's saved position and tell them we did. A silent jump
+    // into the middle of a video reads as a bug.
+    function applyResume(adapter, source, itemId) {
+        api('anchor_fm_media_resume', { source: source, item_id: itemId })
+            .done(res => {
+                if (!res || !res.success) return;
+                const sec = Number(res.data.resumeSeconds) || 0;
+                if (sec <= 0) return;
+
+                adapter.seek(sec);
+                if (trackState) trackState.lastTime = sec;
+
+                renderResumeBar(sec, function () {
+                    adapter.seek(0);
+                    if (trackState) {
+                        trackState.lastTime = 0;
+                        trackState.accum = 0;
+                        // Persist the reset immediately, so closing without
+                        // watching does not restore the old position.
+                        api('anchor_fm_media_progress', {
+                            source: source, item_id: itemId,
+                            point: 0, delta: 0, duration: trackState.duration,
+                            ended: 0, new_session: 0,
+                        });
+                    }
+                });
+            });
+    }
+
+    function renderResumeBar(seconds, onStartOver) {
+        const $bar = $(`<div class="afm__resumeBar">
+                <span class="afm__resumeText">Resuming from ${esc(fmtMMSS(seconds))}</span>
+                <button type="button" class="afm__resumeReset">Start over</button>
+                <button type="button" class="afm__resumeClose" aria-label="Dismiss">&times;</button>
+            </div>`);
+
+        $bar.find('.afm__resumeReset').on('click', function () {
+            if (typeof onStartOver === 'function') onStartOver();
+            $bar.remove();
+        });
+        $bar.find('.afm__resumeClose').on('click', function () { $bar.remove(); });
+
+        // Insert above the player, not inside it — the file viewer's stage is a
+        // black overflow:hidden box and the bar would be buried in it.
+        $modalBody.find('.afm__vplayer, .afm__viewerStage').first().before($bar);
     }
 
     function stopVideoTracking() {
         flushProgress(true);
-        if (activePlayer && activePlayer.unload) { try { activePlayer.unload(); } catch (e) {} }
+        if (activeAdapter) activeAdapter.unload();
+        activeAdapter = null;
         activePlayer = null;
         trackState = null;
     }
