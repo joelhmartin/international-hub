@@ -2863,12 +2863,25 @@ class Anchor_Private_File_Manager {
         while (ob_get_level() > 0) { @ob_end_clean(); }
         @set_time_limit(0);
 
+        $requested = ($end - $start) + 1;
+
         $fh = @fopen($path, 'rb');
-        if (!$fh) return;
+        if (!$fh) {
+            // Unambiguous failure -- never caused by a client going away,
+            // so always worth knowing about. The caller already sent
+            // Content-Length for $requested bytes; the client now gets a
+            // truncated body with no explanation unless this is logged.
+            error_log(sprintf(
+                'Anchor FM: stream_file_range() could not open "%s" (requested %d-%d)',
+                $path, $start, $end
+            ));
+            return;
+        }
 
         if ($start > 0) { fseek($fh, $start); }
 
-        $remaining = ($end - $start) + 1;
+        $remaining = $requested;
+        $written = 0;
         $chunk = 262144; // 256KB
 
         while ($remaining > 0 && !feof($fh)) {
@@ -2876,10 +2889,25 @@ class Anchor_Private_File_Manager {
             $buf = fread($fh, $read);
             if ($buf === false || $buf === '') break;
             echo $buf;
+            $written += strlen($buf);
             $remaining -= strlen($buf);
             flush();
         }
         fclose($fh);
+
+        // A short read here is either a genuinely short/truncated file on
+        // disk, or -- far more commonly once video playback is in the
+        // picture -- the client aborting mid-stream (every seek and every
+        // player teardown kills an in-flight range request). Those look
+        // identical at this point: both leave $written < $requested. Only
+        // log when the connection is still alive, or normal seeking would
+        // flood the error log with non-faults.
+        if ($written < $requested && connection_status() === CONNECTION_NORMAL) {
+            error_log(sprintf(
+                'Anchor FM: stream_file_range() wrote %d of %d requested bytes for "%s" (%d-%d) with connection still open',
+                $written, $requested, $path, $start, $end
+            ));
+        }
     }
 
     public function ajax_stream() {
