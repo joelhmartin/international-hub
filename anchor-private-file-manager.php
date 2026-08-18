@@ -11,6 +11,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 
 class Anchor_Private_File_Manager {
 
@@ -2849,6 +2850,38 @@ class Anchor_Private_File_Manager {
         ]);
     }
 
+    /**
+     * Write an inclusive byte window of a file to the output stream.
+     *
+     * readfile() would pull the whole file into the output buffer, which a
+     * multi-hundred-megabyte video will not survive. This reads in bounded
+     * chunks and flushes as it goes.
+     */
+    private static function stream_file_range($path, $start, $end) {
+        // Discard WordPress's output buffering, or the body accumulates in
+        // memory instead of streaming.
+        while (ob_get_level() > 0) { @ob_end_clean(); }
+        @set_time_limit(0);
+
+        $fh = @fopen($path, 'rb');
+        if (!$fh) return;
+
+        if ($start > 0) { fseek($fh, $start); }
+
+        $remaining = ($end - $start) + 1;
+        $chunk = 262144; // 256KB
+
+        while ($remaining > 0 && !feof($fh)) {
+            $read = ($remaining > $chunk) ? $chunk : $remaining;
+            $buf = fread($fh, $read);
+            if ($buf === false || $buf === '') break;
+            echo $buf;
+            $remaining -= strlen($buf);
+            flush();
+        }
+        fclose($fh);
+    }
+
     public function ajax_stream() {
         if (!is_user_logged_in()) {
             status_header(401);
@@ -2884,15 +2917,45 @@ class Anchor_Private_File_Manager {
 
         $disp = $disposition === 'inline' ? 'inline' : 'attachment';
         $filename = sanitize_file_name($file->original_name);
+        $size = (int) filesize($path);
 
-        $this->log_activity($user_id, $disp === 'inline' ? 'preview_file' : 'download_file', 'file', $file_id, []);
+        $raw_range = isset($_SERVER['HTTP_RANGE']) ? (string) $_SERVER['HTTP_RANGE'] : '';
+        $range = Anchor_FM_Range::parse($raw_range, $size);
+
+        // One playthrough issues dozens of range requests. Log only the
+        // opening one, or the activity table fills with noise.
+        $is_opening = ($range === null) || (isset($range['start']) && (int) $range['start'] === 0);
+        if ($is_opening) {
+            $this->log_activity($user_id, $disp === 'inline' ? 'preview_file' : 'download_file', 'file', $file_id, []);
+        }
 
         nocache_headers();
+        header('Accept-Ranges: bytes');
         header('Content-Type: ' . $file->mime_type);
-        header('Content-Length: ' . filesize($path));
         header('Content-Disposition: ' . $disp . '; filename="' . $filename . '"');
         header('X-Content-Type-Options: nosniff');
-        @readfile($path);
+
+        if (is_array($range) && empty($range['satisfiable'])) {
+            header('Content-Range: bytes */' . $size);
+            status_header(416);
+            exit;
+        }
+
+        if ($range === null) {
+            header('Content-Length: ' . $size);
+            if ($size > 0) {
+                self::stream_file_range($path, 0, $size - 1);
+            }
+            exit;
+        }
+
+        $start = (int) $range['start'];
+        $end   = (int) $range['end'];
+
+        status_header(206);
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
+        header('Content-Length: ' . (($end - $start) + 1));
+        self::stream_file_range($path, $start, $end);
         exit;
     }
 
