@@ -2497,15 +2497,23 @@ class Anchor_Private_File_Manager {
         $user_id = get_current_user_id();
         if (!user_can($user_id, 'administrator')) $this->json_error('Forbidden', 403);
 
-        $video_id = isset($_POST['video_id']) ? (int) $_POST['video_id'] : 0;
-        if ($video_id <= 0) $this->json_error('Missing video_id');
+        $source  = isset($_POST['source']) ? sanitize_key((string) $_POST['source']) : Anchor_FM_Media_Progress::SOURCE_VIMEO;
+        $item_id = isset($_POST['item_id']) ? (int) $_POST['item_id'] : 0;
+
+        // Back-compat with callers still sending video_id.
+        if ($item_id <= 0 && isset($_POST['video_id'])) {
+            $item_id = (int) $_POST['video_id'];
+        }
+
+        if (!Anchor_FM_Media_Progress::valid_source($source)) $this->json_error('Bad source');
+        if ($item_id <= 0) $this->json_error('Missing item_id');
 
         global $wpdb;
         $views = self::table('video_views');
         $rows = $wpdb->get_results($wpdb->prepare(
             "SELECT user_id, furthest_seconds, total_seconds, percent, sessions, last_viewed_at
-             FROM {$views} WHERE video_id = %d ORDER BY last_viewed_at DESC LIMIT 500",
-            $video_id
+             FROM {$views} WHERE source = %s AND video_id = %d ORDER BY last_viewed_at DESC LIMIT 500",
+            $source, $item_id
         ));
 
         $out = [];

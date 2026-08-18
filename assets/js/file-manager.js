@@ -773,6 +773,9 @@ jQuery(function ($) {
                            controls preload="metadata" playsinline
                            src="${esc(prev.inlineUrl)}"></video>
                 </div>`;
+                if (AnchorFM.isAdmin) {
+                    body += `<div class="afm__vhistory" data-afm-video-history><div class="afm__sectionTitle">Watch history</div><div class="afm__vhistoryBody">Loading…</div></div>`;
+                }
             } else {
                 body += `<div class="afm__viewerNone"><span class="dashicons dashicons-${iconForMime(file.mime)}"></span><div>No preview available</div></div>`;
             }
@@ -787,6 +790,7 @@ jQuery(function ($) {
             openViewerModal(esc(file.name), body, footer);
             if (prev.type === 'video') {
                 mountFilePlayer(file.id, prev.downloadUrl);
+                if (AnchorFM.isAdmin) loadVideoHistory('file', file.id);
             }
         });
     }
@@ -836,7 +840,7 @@ jQuery(function ($) {
         }
         openViewerModal(esc(name), body, '');
         mountVimeoPlayer(playerId, vimeoId, videoId, vimeoHash);
-        if (AnchorFM.isAdmin) loadVideoHistory(videoId);
+        if (AnchorFM.isAdmin) loadVideoHistory('vimeo', videoId);
     }
 
     function mountVimeoPlayer(elId, vimeoId, videoId, vimeoHash) {
@@ -1052,8 +1056,8 @@ jQuery(function ($) {
         return m + ':' + (s < 10 ? '0' : '') + s;
     }
 
-    function loadVideoHistory(videoId) {
-        api('anchor_fm_vimeo_history', { video_id: videoId }).then(res => {
+    function loadVideoHistory(source, itemId) {
+        api('anchor_fm_vimeo_history', { source: source, item_id: itemId }).then(res => {
             const $body = $modalBody.find('.afm__vhistoryBody');
             if (!res || !res.success) { $body.text('Unable to load history.'); return; }
             const rows = res.data.history || [];
