@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.10.1
+ * Version: 2.11.0
  * Author: Anchor Corps
  */
 
@@ -14,7 +14,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.10.1';
+    const VERSION = '2.11.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -428,20 +428,53 @@ class Anchor_Private_File_Manager {
         dbDelta("
             CREATE TABLE {$views} (
                 id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                source VARCHAR(10) NOT NULL DEFAULT 'vimeo',
                 video_id BIGINT(20) UNSIGNED NOT NULL,
                 user_id BIGINT(20) UNSIGNED NOT NULL,
                 furthest_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 total_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                resume_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 percent TINYINT(3) UNSIGNED NOT NULL DEFAULT 0,
                 sessions INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 first_viewed_at DATETIME NOT NULL,
                 last_viewed_at DATETIME NOT NULL,
                 PRIMARY KEY  (id),
-                UNIQUE KEY video_user (video_id, user_id),
+                UNIQUE KEY source_video_user (source, video_id, user_id),
                 KEY video_id (video_id),
                 KEY user_id (user_id)
             ) {$charset_collate};
         ");
+
+        self::drop_legacy_views_key();
+    }
+
+    /**
+     * Drop the pre-2.11.0 UNIQUE KEY (video_id, user_id).
+     *
+     * It is replaced by (source, video_id, user_id); leaving it in place would
+     * wrongly forbid a file row and a Vimeo row that happen to share an id.
+     * Runs only after dbDelta has created the replacement, so the table is
+     * never left without a uniqueness guard. Idempotent — safe to run twice.
+     */
+    private static function drop_legacy_views_key() {
+        global $wpdb;
+        $views = self::table('video_views');
+
+        $has_new = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM information_schema.STATISTICS
+             WHERE table_schema = DATABASE() AND table_name = %s AND index_name = 'source_video_user'",
+            $views
+        ));
+        if ($has_new < 1) return; // replacement missing — leave the old key alone
+
+        $has_old = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM information_schema.STATISTICS
+             WHERE table_schema = DATABASE() AND table_name = %s AND index_name = 'video_user'",
+            $views
+        ));
+        if ($has_old > 0) {
+            $wpdb->query("ALTER TABLE {$views} DROP INDEX video_user");
+        }
     }
 
     private function maybe_upgrade_db() {
