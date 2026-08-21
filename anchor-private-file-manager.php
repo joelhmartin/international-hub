@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.11.0
+ * Version: 2.11.1
  * Author: Anchor Corps
  */
 
@@ -16,7 +16,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.11.0';
+    const VERSION = '2.11.1';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -358,8 +358,7 @@ class Anchor_Private_File_Manager {
     }
 
     private static function ensure_upload_storage() {
-        $upload_dir = wp_upload_dir();
-        $base = trailingslashit($upload_dir['basedir']) . 'anchor-private-files';
+        $base = self::storage_base();
         if (!file_exists($base)) {
             wp_mkdir_p($base);
         }
@@ -972,8 +971,26 @@ class Anchor_Private_File_Manager {
     }
 
     private function get_storage_dir() {
-        $upload_dir = wp_upload_dir();
-        return trailingslashit($upload_dir['basedir']) . 'anchor-private-files';
+        return self::storage_base();
+    }
+
+    /**
+     * Absolute filesystem path of the private file store.
+     *
+     * SECURITY: this store MUST live outside the web root. The per-folder
+     * .htaccess files this plugin writes are inert on Nginx (which Kinsta
+     * runs), so a store under wp-content/uploads is served directly to
+     * anonymous visitors. Override with the ANCHOR_FM_STORAGE_DIR constant
+     * in wp-config.php, or the anchor_fm_storage_dir filter.
+     */
+    public static function storage_base() {
+        if (defined('ANCHOR_FM_STORAGE_DIR') && ANCHOR_FM_STORAGE_DIR) {
+            $base = rtrim((string) ANCHOR_FM_STORAGE_DIR, '/\\');
+        } else {
+            $upload_dir = wp_upload_dir();
+            $base = trailingslashit($upload_dir['basedir']) . 'anchor-private-files';
+        }
+        return (string) apply_filters('anchor_fm_storage_dir', $base);
     }
 
     private function get_file_path_on_disk($file_row) {
