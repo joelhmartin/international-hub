@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.11.1
+ * Version: 2.12.0
  * Author: Anchor Corps
  */
 
@@ -16,7 +16,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.11.1';
+    const VERSION = '2.12.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -476,6 +476,8 @@ class Anchor_Private_File_Manager {
                 furthest_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 total_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 resume_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
+                watched_bits MEDIUMBLOB NULL,
+                duration_seconds INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 percent TINYINT(3) UNSIGNED NOT NULL DEFAULT 0,
                 sessions INT(10) UNSIGNED NOT NULL DEFAULT 0,
                 first_viewed_at DATETIME NOT NULL,
@@ -515,14 +517,40 @@ class Anchor_Private_File_Manager {
         return true;
     }
 
+    /**
+     * Clear pre-coverage watch percentages.
+     *
+     * Before 2.12.0 `percent` measured the furthest point the scrubber
+     * reached, and `total_seconds` counted time elapsed in the player. Neither
+     * can be converted into "which seconds were actually played", so both are
+     * reset rather than carried forward as an invented number. Everyone reads
+     * 0% until they watch again — intended, and chosen deliberately over
+     * seeding coverage as 0..furthest_seconds, which would have preserved the
+     * look of the report by fabricating data.
+     *
+     * resume_seconds, furthest_seconds, sessions and the timestamps are left
+     * untouched.
+     */
+    private static function reset_pre_coverage_watch_stats() {
+        global $wpdb;
+        $views = self::table('video_views');
+        $wpdb->query("UPDATE {$views} SET percent = 0, total_seconds = 0, watched_bits = NULL");
+    }
+
     private function maybe_upgrade_db() {
         $installed = (string) get_option(self::OPT_DB_VERSION, '0');
         if (version_compare($installed, self::VERSION, '<')) {
+            // Whether this site predates coverage tracking. Must be captured
+            // before the option is bumped, and applied only once.
+            $pre_coverage = version_compare($installed, '2.12.0', '<');
+
             self::ensure_links_table();
-            // Only record the upgrade when the schema change actually landed.
-            // A host where dbDelta fails to add source_video_user must retry
-            // on the next load rather than be stranded with the legacy key.
-            if (self::ensure_videos_table()) {
+            $views_ok = self::ensure_videos_table();
+
+            if ($views_ok && $pre_coverage) {
+                self::reset_pre_coverage_watch_stats();
+            }
+            if ($views_ok) {
                 update_option(self::OPT_DB_VERSION, self::VERSION);
             }
         }
