@@ -16,8 +16,40 @@ class Anchor_FM_Media_Progress {
     const SOURCE_VIMEO = 'vimeo';
     const SOURCE_FILE  = 'file';
 
+    /**
+     * Most segments one heartbeat may carry. The browser sends a handful; a
+     * hand-rolled POST can send hundreds of thousands (an 8MB body holds
+     * roughly 800,000), and mark_segments() walks every one of them.
+     */
+    const MAX_SEGMENTS_PER_BEAT = 500;
+
     public static function valid_source($source) {
         return in_array($source, [self::SOURCE_VIMEO, self::SOURCE_FILE], true);
+    }
+
+    /**
+     * Clamp every segment's end to a known duration.
+     *
+     * Without this a client can claim it played [0, 86400) of a two-minute
+     * video, and total_seconds — which the admin report renders as mm:ss —
+     * reads 24:00:00. The pre-coverage code held this invariant with
+     * min($total, $duration); the bitset has to hold it at the input instead.
+     * Malformed entries are passed through untouched for mark_segments() to
+     * reject, so this stays a clamp and not a second validator.
+     *
+     * @param mixed $segments expected array of [from, to]
+     * @param int   $max      known duration in seconds; ignored when <= 0
+     */
+    public static function clamp_segments($segments, $max) {
+        $max = (int) $max;
+        if (!is_array($segments) || $max <= 0) return $segments;
+
+        foreach ($segments as $i => $seg) {
+            if (!is_array($seg) || !isset($seg[0], $seg[1])) continue;
+            if (!is_numeric($seg[0]) || !is_numeric($seg[1])) continue;
+            if ((int) $seg[1] > $max) $segments[$i][1] = $max;
+        }
+        return $segments;
     }
 
     /**
@@ -36,13 +68,22 @@ class Anchor_FM_Media_Progress {
         $duration = max(0, (int) $duration);
         $segments = is_array($segments) ? $segments : [];
 
-        // A heartbeat carrying nothing at all is not a save. This is the shape
-        // produced by opening and closing a video before metadata arrives;
-        // writing it would clobber a real position and percentage with zeros.
-        // "Start over" ($reset) and finishing ($ended) are real events and
-        // still write, as does any beat that actually played something.
-        if ($point <= 0 && empty($segments) && !$ended && !$reset) {
-            return true; // nothing to record, and not a failure
+        // Everything below arrives from the browser, so cap it before it can
+        // do damage.
+        //
+        // duration_seconds is INT(10) UNSIGNED and sticky (it only ever
+        // grows): a value past 4294967295 either fails the write in strict
+        // mode -- a 500 on every heartbeat for that row, forever -- or
+        // saturates and pins the user's percent near 0 with no way back.
+        $duration = min($duration, Anchor_FM_Coverage::MAX_SECONDS);
+        // Same ceiling for the playhead: it feeds furthest_seconds, which is
+        // the same unsigned column.
+        $point    = min($point, Anchor_FM_Coverage::MAX_SECONDS);
+        // mark_segments() loops the whole list; 200 maximum-length segments
+        // already cost ~1s of CPU. Repeated, an unbounded list is a site-wide
+        // outage on shared hosting. Real beats carry a handful.
+        if (count($segments) > self::MAX_SEGMENTS_PER_BEAT) {
+            $segments = array_slice($segments, 0, self::MAX_SEGMENTS_PER_BEAT);
         }
 
         $existing = $wpdb->get_row($wpdb->prepare(
@@ -58,8 +99,23 @@ class Anchor_FM_Media_Progress {
             $known_duration = $duration;
         }
 
+        // No segment may claim time past the end of the video.
+        $segments = self::clamp_segments($segments, $known_duration);
+
         $bits = $existing && $existing['watched_bits'] !== null ? (string) $existing['watched_bits'] : '';
+        $before = $bits;
         $bits = Anchor_FM_Coverage::mark_segments($bits, $segments);
+
+        // A heartbeat that changed nothing is not a save. This is the shape
+        // produced by opening and closing a video before metadata arrives --
+        // and by a malformed-but-non-empty segment list, which an
+        // empty($segments) test would wave through. Writing it would clobber a
+        // real position and percentage with zeros, because resume_point(0, ...)
+        // returns 0. "Start over" ($reset) and finishing ($ended) are real
+        // events and still write, as does any beat that actually marked a bit.
+        if ($point <= 0 && $bits === $before && !$ended && !$reset) {
+            return true; // nothing to record, and not a failure
+        }
 
         $covered  = Anchor_FM_Coverage::count_set($bits);
         $percent  = Anchor_FM_Coverage::percent($covered, $known_duration);

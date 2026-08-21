@@ -29,6 +29,15 @@ require __DIR__ . '/../includes/class-afm-range.php';
 require __DIR__ . '/../includes/class-afm-coverage.php';
 
 $failures = 0;
+
+// A PHP warning emitted before wp_send_json corrupts the AJAX response on any
+// host with display_errors on, so the suite has to be able to fail on one.
+set_error_handler(function ($no, $str, $file, $line) {
+    global $failures; $failures++;
+    echo "[FAIL] PHP warning: $str at $file:$line\n";
+    return true;
+});
+
 function check($label, $actual, $expected) {
     global $failures;
     $ok = $actual === $expected;
@@ -359,6 +368,28 @@ check('percent exact hundred', Anchor_FM_Coverage::percent(120, 120), 100);
 check('percent clamps above hundred', Anchor_FM_Coverage::percent(200, 120), 100);
 check('percent zero coverage', Anchor_FM_Coverage::percent(0, 120), 0);
 check('percent negative coverage', Anchor_FM_Coverage::percent(-5, 120), 0);
+
+// --- Anchor_FM_Media_Progress::clamp_segments ---
+require __DIR__ . '/../includes/class-afm-media-progress.php';
+
+check('clamp trims a segment past the duration',
+    Anchor_FM_Media_Progress::clamp_segments([[0, 86400]], 120), [[0, 120]]);
+check('clamp leaves an in-range segment alone',
+    Anchor_FM_Media_Progress::clamp_segments([[10, 40]], 120), [[10, 40]]);
+check('clamp leaves a segment ending exactly at the duration',
+    Anchor_FM_Media_Progress::clamp_segments([[0, 120]], 120), [[0, 120]]);
+check('clamp trims every offending segment',
+    Anchor_FM_Media_Progress::clamp_segments([[0, 500], [10, 20], [30, 999]], 120),
+    [[0, 120], [10, 20], [30, 120]]);
+check('clamp with unknown duration is a no-op',
+    Anchor_FM_Media_Progress::clamp_segments([[0, 86400]], 0), [[0, 86400]]);
+check('clamp passes malformed entries through untouched',
+    Anchor_FM_Media_Progress::clamp_segments([['a', 'b'], [0, 500]], 120), [['a', 'b'], [0, 120]]);
+check('clamp on a non-array returns it unchanged',
+    Anchor_FM_Media_Progress::clamp_segments('nope', 120), 'nope');
+check('clamped segment marks only the real duration',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('',
+        Anchor_FM_Media_Progress::clamp_segments([[0, 86400]], 120))), 120);
 
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
