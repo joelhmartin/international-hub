@@ -950,12 +950,21 @@ jQuery(function ($) {
     // different names. One adapter each keeps the heartbeat logic single-copy.
     // The two implementations must stay symmetric — that symmetry is the point.
     function vimeoAdapter(player) {
+        // Cached because the tick needs the rate synchronously and Vimeo's
+        // getPlaybackRate() is a promise. Defaults to 1 so a player that
+        // never fires the event still reports an honest normal speed.
+        let rate = 1;
+        player.on('playbackratechange', d => {
+            const r = Number(d && d.playbackRate);
+            if (isFinite(r) && r > 0) rate = r;
+        });
         return {
             onTimeUpdate: cb => player.on('timeupdate', d => cb(Math.floor((d && d.seconds) || 0))),
             onPlay: cb => player.on('play', cb),
             onPause: cb => player.on('pause', cb),
             onEnded: cb => player.on('ended', cb),
             getDuration: () => player.getDuration().then(d => Math.floor(d || 0)).catch(() => 0),
+            getRate: () => rate,
             // These return promises: try/catch cannot see a rejection from a
             // player that is not ready yet, so swallow it explicitly.
             seek: t => { try { const p = player.setCurrentTime(t); if (p && p.catch) p.catch(() => {}); } catch (e) {} },
@@ -971,6 +980,7 @@ jQuery(function ($) {
             onEnded: cb => el.addEventListener('ended', cb),
             // duration is NaN until metadata loads and Infinity for streams.
             getDuration: () => Promise.resolve(isFinite(el.duration) ? Math.floor(el.duration) : 0),
+            getRate: () => el.playbackRate || 1,
             seek: t => { try { el.currentTime = t; } catch (e) {} },
             unload: () => { try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} },
         };
@@ -987,6 +997,12 @@ jQuery(function ($) {
             newSession: true,
             ended: false,
             token: token,
+            // Whether the player is actually playing, and the wall-clock time
+            // of the previous tick. Together they separate real playback from
+            // a scrub: timeupdate also fires on every seek completion, paused
+            // included, and only playback is bounded by the wall clock.
+            playing: false,
+            lastTickMs: 0,
             segments: [],
             segStart: null,
             segEnd: null,
@@ -1001,7 +1017,9 @@ jQuery(function ($) {
         });
 
         adapter.onTimeUpdate(function (t) {
-            if (!trackState) return;
+            if (!trackState || trackState.token !== token) return;
+
+            const nowMs = Date.now();
 
             if (trackState.segStart === null) {
                 // First tick of a new stretch of playback.
@@ -1009,21 +1027,33 @@ jQuery(function ($) {
                 trackState.segEnd = t;
             } else {
                 const gap = t - trackState.segEnd;
-                if (gap >= 0 && gap <= 2) {
-                    // Playback advanced normally (timeupdate fires ~4x/sec, so
-                    // even at 4x speed a tick advances about a second).
+                // Media time cannot outrun wall-clock time during playback at
+                // any rate; dragging the scrubber always does. A fixed gap
+                // ceiling cannot tell the two apart — it credits a slow drag
+                // (paused or not) as fully watched, and misreads honest 8x
+                // playback as a seek. So the ceiling is the wall clock scaled
+                // by the playback rate, and only while actually playing. The
+                // +1 absorbs integer-second rounding on the media clock.
+                const wallSeconds = Math.max(0, (nowMs - trackState.lastTickMs) / 1000);
+                const rate = (typeof adapter.getRate === 'function' ? Number(adapter.getRate()) : 1) || 1;
+                const allowed = (wallSeconds * rate) + 1;
+
+                if (trackState.playing && gap >= 0 && gap <= allowed) {
+                    // Playback advanced plausibly — extend the stretch.
                     if (gap > 0) trackState.accum += gap;
                     trackState.segEnd = t;
                 } else {
-                    // The playhead jumped — a seek. Close the stretch we were
-                    // in and start a new one where we landed. This is the line
-                    // that stops scrubbing from counting as watching.
+                    // The playhead jumped, or moved while not playing — a
+                    // seek. Close the stretch we were in and start a new one
+                    // where we landed. This is the line that stops scrubbing
+                    // from counting as watching.
                     closeSegment();
                     trackState.segStart = t;
                     trackState.segEnd = t;
                 }
             }
 
+            trackState.lastTickMs = nowMs;
             trackState.lastTime = t;
             if (trackState.accum >= 10) flushProgress(false);
         });
@@ -1034,12 +1064,33 @@ jQuery(function ($) {
         adapter.onPlay(function () {
             if (!trackState || trackState.token !== token) return;
             trackState.ended = false;
+            trackState.playing = true;
         });
 
-        adapter.onPause(function () { flushProgress(false); });
+        // The token guards below matter as much as the one above: a straggler
+        // tick from a torn-down player would otherwise write into whichever
+        // mount is live now — two of them inject a real segment into the next
+        // video, and a stale `ended` zeroes the live mount's resume point.
+        adapter.onPause(function () {
+            if (!trackState || trackState.token !== token) return;
+            trackState.playing = false;
+            flushProgress(false);
+        });
 
         adapter.onEnded(function () {
-            if (trackState) trackState.ended = true;
+            if (!trackState || trackState.token !== token) return;
+            trackState.playing = false;
+            trackState.ended = true;
+            // Carry coverage to the true end before flushing. `ended` fires
+            // only after genuine end-of-media, so this grants at most the
+            // final second — and without it 100% is unreachable on the Vimeo
+            // path, whose last timeupdate lands a fraction short and floors
+            // to D-1, capping a 20-minute video at 99%.
+            if (trackState.duration > 0) {
+                if (trackState.segStart === null) trackState.segStart = Math.max(0, trackState.duration - 1);
+                trackState.segEnd  = Math.max(trackState.segEnd, trackState.duration);
+                trackState.lastTime = trackState.duration;
+            }
             flushProgress(true);
         });
     }
