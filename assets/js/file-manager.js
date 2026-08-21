@@ -1356,7 +1356,13 @@ jQuery(function ($) {
 
     // Small popup menu for folder/file actions
     const $menu = $('<div class="afm__menu" data-afm-menu hidden></div>');
-    $root.append($menu);
+    // Mounted on <body>, not inside the plugin's own container, and positioned
+    // fixed. An absolutely-positioned menu inside .afm is layered *within*
+    // whatever wrapper the host theme puts around the plugin; if that wrapper
+    // creates a stacking context, no z-index on the menu can lift it above a
+    // later sibling section of the page. Escaping to <body> sidesteps every
+    // ancestor stacking context and overflow clip at once.
+    $('body').append($menu);
 
     function closeMenu() {
         $menu.prop('hidden', true).html('');
@@ -1365,8 +1371,6 @@ jQuery(function ($) {
 
     function openMenu(anchorEl, items, context) {
         state.menuContext = context || null;
-        const rect = anchorEl.getBoundingClientRect();
-        const rootRect = $root[0].getBoundingClientRect();
 
         const html = (items || []).map(it => `
             <button type="button" class="afm__menuItem ${it.danger ? 'is-danger' : ''} ${it.disabled ? 'is-disabled' : ''}" data-afm-menu-action="${esc(it.action)}" ${it.disabled ? 'disabled' : ''}>
@@ -1377,11 +1381,43 @@ jQuery(function ($) {
 
         $menu.html(html).prop('hidden', false);
 
-        // Position relative to root
-        const top = rect.bottom - rootRect.top + 6;
-        const left = rect.right - rootRect.left - 220;
-        $menu.css({ top: Math.max(8, top) + 'px', left: Math.max(8, left) + 'px' });
+        // The menu is position:fixed on <body>, so getBoundingClientRect()'s
+        // viewport coordinates are already the right coordinate space — no
+        // offset arithmetic against a container, and nothing to go wrong if the
+        // page scrolls between measuring and painting.
+        const rect  = anchorEl.getBoundingClientRect();
+        const menuW = $menu.outerWidth() || 220;
+        const menuH = $menu.outerHeight() || 0;
+        const vw = window.innerWidth || document.documentElement.clientWidth;
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+        const GAP = 6, EDGE = 8;
+
+        // Right-align to the trigger, then keep it inside the viewport.
+        let left = rect.right - menuW;
+        if (left + menuW > vw - EDGE) left = vw - EDGE - menuW;
+        if (left < EDGE) left = EDGE;
+
+        // Below the trigger by default; flip above when there is no room under
+        // it, which is what made the menu run off the bottom of the panel.
+        let top = rect.bottom + GAP;
+        if (top + menuH > vh - EDGE) {
+            const above = rect.top - GAP - menuH;
+            top = above >= EDGE ? above : Math.max(EDGE, vh - EDGE - menuH);
+        }
+
+        $menu.css({ top: Math.round(top) + 'px', left: Math.round(left) + 'px' });
     }
+
+    // A fixed menu does not travel with the page, so anything that moves the
+    // trigger must dismiss it rather than leave it stranded mid-screen. Capture
+    // phase, because scrolls inside the sidebar and the file pane do not bubble
+    // to window.
+    window.addEventListener('scroll', function () {
+        if (!$menu.prop('hidden')) closeMenu();
+    }, true);
+    window.addEventListener('resize', function () {
+        if (!$menu.prop('hidden')) closeMenu();
+    });
 
     function findFolderName(folderId) {
         const stack = (state.tree || []).slice();
