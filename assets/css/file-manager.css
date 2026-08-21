@@ -1151,14 +1151,22 @@
 }
 
 .afm__menu {
-  position: absolute;
+  /* Fixed, and mounted on <body> — see openMenu(). Absolute positioning inside
+     the plugin container let a host theme's stacking context trap the menu
+     behind later page sections regardless of z-index. 10001 clears everything
+     this stylesheet uses, including the viewer modal (9998) and toasts (10000). */
+  position: fixed;
   width: 220px;
   border: 1px solid var(--afm-border);
   background: #ffffff;
   border-radius: 14px;
   box-shadow: var(--afm-shadow);
   padding: 8px;
-  z-index: 9996;
+  z-index: 10001;
+  /* A long menu on a short screen must stay reachable rather than running off
+     the bottom with its last items unclickable. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .afm__menuItem {
