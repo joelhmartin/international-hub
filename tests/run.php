@@ -122,33 +122,6 @@ check('fallback_title', Anchor_FM_Vimeo::fallback_title('123456789'), 'Vimeo vid
 
 require __DIR__ . '/../includes/class-afm-watch-math.php';
 
-// apply_progress($existing, $point_seconds, $delta_seconds, $duration_seconds)
-// $existing = ['furthest_seconds'=>int,'total_seconds'=>int]; returns merged + percent.
-$start = ['furthest_seconds' => 0, 'total_seconds' => 0];
-
-$r = Anchor_FM_Watch_Math::apply_progress($start, 30, 30, 100);
-check('first beat furthest', $r['furthest_seconds'], 30);
-check('first beat total', $r['total_seconds'], 30);
-check('first beat percent', $r['percent'], 30);
-
-$r2 = Anchor_FM_Watch_Math::apply_progress($r, 10, 10, 100); // user scrubbed back, watched 10 more
-check('scrub keeps furthest', $r2['furthest_seconds'], 30);
-check('scrub adds to total', $r2['total_seconds'], 40);
-
-// Oversized delta (seek-induced) is clamped to a sane per-beat ceiling (<= 60s).
-$r3 = Anchor_FM_Watch_Math::apply_progress($start, 90, 5000, 100);
-check('delta clamped', $r3['total_seconds'], 60);
-check('furthest tracks point', $r3['furthest_seconds'], 90);
-
-// total never exceeds duration; percent caps at 100.
-$r4 = Anchor_FM_Watch_Math::apply_progress(['furthest_seconds'=>100,'total_seconds'=>100], 100, 50, 100);
-check('total capped at duration', $r4['total_seconds'], 100);
-check('percent capped', $r4['percent'], 100);
-
-// zero/garbage duration => percent 0, no divide-by-zero
-$r5 = Anchor_FM_Watch_Math::apply_progress($start, 5, 5, 0);
-check('zero duration percent', $r5['percent'], 0);
-
 // furthest_point($prev_furthest, $point_seconds, $duration_seconds)
 // The furthest position ever reached. No longer drives percent — that comes
 // from Anchor_FM_Coverage — but is still recorded.

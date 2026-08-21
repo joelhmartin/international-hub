@@ -9,6 +9,7 @@
 if (!defined('ABSPATH')) exit;
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-vimeo.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-coverage.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-media-progress.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
@@ -2505,13 +2506,17 @@ class Anchor_Private_File_Manager {
 
         $this->require_media_access($source, $item_id, $user_id);
 
+        $raw_segments = isset($_POST['segments']) ? (string) wp_unslash($_POST['segments']) : '';
+        $segments = $raw_segments !== '' ? json_decode($raw_segments, true) : [];
+        if (!is_array($segments)) $segments = [];
+
         $saved = Anchor_FM_Media_Progress::record(
             self::table('video_views'),
             $source,
             $item_id,
             $user_id,
+            $segments,
             isset($_POST['point']) ? (int) $_POST['point'] : 0,
-            isset($_POST['delta']) ? (int) $_POST['delta'] : 0,
             isset($_POST['duration']) ? (int) $_POST['duration'] : 0,
             !empty($_POST['ended']),
             !empty($_POST['new_session']),
