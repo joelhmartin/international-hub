@@ -361,6 +361,10 @@ check('coverage segments skip malformed',
     Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', [[0,5], 'x', [3], null, [10,15]])), 10);
 check('coverage segments non-array input',
     Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', 'nope')), 0);
+check('coverage segments skip object shaped',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', [['from'=>0,'to'=>5],[10,15]])), 5);
+check('coverage segments skip string keys only',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', [['a'=>1,'b'=>2]])), 0);
 
 // percent
 check('percent zero duration', Anchor_FM_Coverage::percent(50, 0), 0);

@@ -64,6 +64,7 @@ class Anchor_FM_Coverage {
 
         foreach ($segments as $seg) {
             if (!is_array($seg) || count($seg) < 2) continue;
+            if (!isset($seg[0]) || !isset($seg[1])) continue;
             if (!is_numeric($seg[0]) || !is_numeric($seg[1])) continue;
             $bits = self::mark($bits, (int) $seg[0], (int) $seg[1]);
         }
