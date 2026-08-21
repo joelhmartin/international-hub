@@ -237,12 +237,12 @@ git commit -m "feat: add per-second watch coverage bitset with unit tests"
 **Interfaces:**
 - Consumes: nothing.
 - Produces: `Anchor_FM_Watch_Math::furthest_point(int $prev_furthest, int $point_seconds, int $duration_seconds) : int`
-- Removes: `Anchor_FM_Watch_Math::apply_progress()` and `Anchor_FM_Watch_Math::MAX_BEAT_SECONDS` (the per-beat delta clamp has nothing left to clamp).
+- **Leaves `apply_progress()` and `MAX_BEAT_SECONDS` in place for now.** `Anchor_FM_Media_Progress::record()` still calls `apply_progress()` until Task 4 rewrites it; deleting it here would leave a commit where the plugin fatals on every heartbeat. Task 4 removes both once its last caller is gone.
 - Unchanged and still required: `resume_point()`, `is_resume_stale()`, `RESUME_MIN_SECONDS`, `RESUME_END_PAD_SECONDS`, `RESUME_TTL_DAYS`, `RESUME_MAX_SECONDS`, `SECONDS_PER_DAY`.
 
 - [ ] **Step 1: Replace the failing tests**
 
-In `tests/run.php`, delete the whole block from the comment `// apply_progress($existing, ...` through `check('zero duration percent', $r5['percent'], 0);` (currently lines 124-149) and put this in its place:
+In `tests/run.php`, **leave the existing `apply_progress` block alone** — that function is still live until Task 4. Append these checks immediately after it (after `check('zero duration percent', $r5['percent'], 0);`):
 
 ```php
 // furthest_point($prev_furthest, $point_seconds, $duration_seconds)
@@ -264,9 +264,9 @@ Expected: fatal error — `Call to undefined method Anchor_FM_Watch_Math::furthe
 
 - [ ] **Step 3: Write the implementation**
 
-In `includes/class-afm-watch-math.php`:
-
-Delete the `MAX_BEAT_SECONDS` constant and the entire `apply_progress()` method. Add in their place:
+In `includes/class-afm-watch-math.php`, **add** this method. Do not delete
+`apply_progress()` or `MAX_BEAT_SECONDS` — `record()` still calls
+`apply_progress()` and will until Task 4:
 
 ```php
     /**
@@ -297,16 +297,16 @@ Leave `resume_point()`, `is_resume_stale()` and every constant other than `MAX_B
 Run: `php tests/run.php`
 Expected: `ALL PASS`. The resume and coverage checks must all still pass.
 
-- [ ] **Step 5: Verify nothing else calls the removed API**
+- [ ] **Step 5: Confirm the plugin still works at this commit**
 
-Run: `grep -rn "apply_progress\|MAX_BEAT_SECONDS" --include="*.php" --include="*.js" .`
-Expected: matches only in `docs/` (historical specs and plans). If any match appears in `includes/`, `tests/`, `assets/` or `anchor-private-file-manager.php`, that call site is broken and must be fixed before committing — Task 4 rewrites the one in `class-afm-media-progress.php`, so a match there is expected at this point and is fixed in that task.
+Run: `php -l includes/class-afm-watch-math.php && php tests/run.php`
+Expected: lint clean, `ALL PASS`, and both the old `apply_progress` checks and the new `furthest_point` checks passing side by side. This task is purely additive — nothing that existed before it changed behaviour.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add includes/class-afm-watch-math.php tests/run.php
-git commit -m "refactor: replace apply_progress with furthest_point, drop percent-from-furthest"
+git commit -m "feat: add furthest_point alongside apply_progress"
 ```
 
 ---
@@ -576,15 +576,27 @@ Leave `require_nonce()`, the login check, `require_media_access()` and the `$sav
 Run: `php -l anchor-private-file-manager.php && php -l includes/class-afm-media-progress.php && php tests/run.php`
 Expected: both lints clean, `ALL PASS`.
 
-- [ ] **Step 5: Verify no stale `delta` references remain**
+- [ ] **Step 5: Remove the now-unused percent-from-furthest code**
+
+`record()` was the last caller of `apply_progress()`. Now that it is gone:
+
+- delete the `apply_progress()` method and the `MAX_BEAT_SECONDS` constant from `includes/class-afm-watch-math.php`
+- delete the `apply_progress` test block from `tests/run.php` — the comment `// apply_progress($existing, ...` through `check('zero duration percent', $r5['percent'], 0);`
+
+Then run `grep -rn "apply_progress\|MAX_BEAT_SECONDS" --include="*.php" --include="*.js" includes/ tests/ assets/ anchor-private-file-manager.php`
+Expected: no matches. Matches inside `docs/` are historical and stay.
+
+Re-run `php tests/run.php` — expected `ALL PASS`, now without the deleted checks.
+
+- [ ] **Step 6: Verify no stale `delta` references remain**
 
 Run: `grep -rn "'delta'\|\$delta\|delta:" --include="*.php" --include="*.js" includes/ assets/ anchor-private-file-manager.php`
 Expected: matches only in `assets/js/file-manager.js`, which Task 5 rewrites. Any match in PHP is a leftover and must be removed now.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add anchor-private-file-manager.php includes/class-afm-media-progress.php
+git add anchor-private-file-manager.php includes/class-afm-media-progress.php includes/class-afm-watch-math.php tests/run.php
 git commit -m "feat: derive watch percent from played segments, not furthest point"
 ```
 
