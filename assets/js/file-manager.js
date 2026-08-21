@@ -969,6 +969,9 @@ jQuery(function ($) {
             newSession: true,
             ended: false,
             token: token,
+            segments: [],
+            segStart: null,
+            segEnd: null,
         };
         activeAdapter = adapter;
 
@@ -981,10 +984,28 @@ jQuery(function ($) {
 
         adapter.onTimeUpdate(function (t) {
             if (!trackState) return;
-            const delta = t - trackState.lastTime;
-            // Guards against seek jumps counting as watched time. Native
-            // timeupdate fires ~4x/sec, so most deltas are 0 or 1.
-            if (delta > 0 && delta <= 2) trackState.accum += delta;
+
+            if (trackState.segStart === null) {
+                // First tick of a new stretch of playback.
+                trackState.segStart = t;
+                trackState.segEnd = t;
+            } else {
+                const gap = t - trackState.segEnd;
+                if (gap >= 0 && gap <= 2) {
+                    // Playback advanced normally (timeupdate fires ~4x/sec, so
+                    // even at 4x speed a tick advances about a second).
+                    if (gap > 0) trackState.accum += gap;
+                    trackState.segEnd = t;
+                } else {
+                    // The playhead jumped — a seek. Close the stretch we were
+                    // in and start a new one where we landed. This is the line
+                    // that stops scrubbing from counting as watching.
+                    closeSegment();
+                    trackState.segStart = t;
+                    trackState.segEnd = t;
+                }
+            }
+
             trackState.lastTime = t;
             if (trackState.accum >= 10) flushProgress(false);
         });
@@ -1005,25 +1026,49 @@ jQuery(function ($) {
         });
     }
 
+    // Push the stretch currently being played into the pending list. Segments
+    // are half-open [start, end): playing from t=0 to t=5 means seconds 0-4
+    // were seen, which is five seconds, not six.
+    function closeSegment() {
+        if (!trackState) return;
+        if (trackState.segStart === null) return;
+        if (trackState.segEnd > trackState.segStart) {
+            trackState.segments.push([trackState.segStart, trackState.segEnd]);
+        }
+        trackState.segStart = null;
+        trackState.segEnd = null;
+    }
+
     // `reset` marks a deliberate "Start over": the server treats a zero
     // position as intentional rather than as the empty heartbeat a
     // closed-before-metadata modal produces, which it otherwise discards.
     function flushProgress(force, reset) {
         if (!trackState) return;
-        if (!force && trackState.accum <= 0) return;
+
+        // Capture the stretch in progress, so closing mid-play doesn't lose it.
+        closeSegment();
+
+        if (!force && trackState.segments.length === 0) return;
 
         const payload = {
             source: trackState.source,
             item_id: trackState.itemId,
+            segments: JSON.stringify(trackState.segments),
             point: trackState.lastTime,
-            delta: trackState.accum,
             duration: trackState.duration,
             ended: trackState.ended ? 1 : 0,
             new_session: trackState.newSession ? 1 : 0,
             reset: reset ? 1 : 0,
         };
+        trackState.segments = [];
         trackState.accum = 0;
         trackState.newSession = false;
+
+        // Playback may still be running; resume the open stretch where we are
+        // so the next tick continues rather than starting a spurious segment.
+        trackState.segStart = trackState.lastTime;
+        trackState.segEnd = trackState.lastTime;
+
         api('anchor_fm_media_progress', payload);
     }
 
@@ -1053,6 +1098,9 @@ jQuery(function ($) {
                     trackState.lastTime = 0;
                     trackState.accum = 0;
                     trackState.ended = false;
+                    trackState.segments = [];
+                    trackState.segStart = null;
+                    trackState.segEnd = null;
                     // Reuses the shared payload builder so the reset also
                     // clears newSession/ended consistently, and persists
                     // immediately so closing without watching does not
