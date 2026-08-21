@@ -438,11 +438,28 @@ class Anchor_Private_File_Manager {
     }
 
     /**
-     * @return bool True when the (source, video_id, user_id) unique key exists
-     *              after this call. False means dbDelta did not manage to add
-     *              it on this host, and the caller MUST NOT record the upgrade
-     *              as done -- otherwise the migration never retries and every
-     *              file-source progress write collides with the legacy key.
+     * Whether a named column currently exists on the video_views table.
+     * The index check alone cannot gate the 2.12.0 upgrade: source_video_user
+     * is already present on every 2.11.x site, so it proves nothing about the
+     * columns coverage tracking needs.
+     */
+    private static function views_column_exists($column) {
+        global $wpdb;
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM information_schema.COLUMNS
+             WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+            self::table('video_views'), $column
+        )) > 0;
+    }
+
+    /**
+     * @return bool True when the (source, video_id, user_id) unique key AND
+     *              the coverage columns all exist after this call. False means
+     *              dbDelta did not manage to apply the schema on this host,
+     *              and the caller MUST NOT record the upgrade as done --
+     *              otherwise the migration never retries, every file-source
+     *              progress write collides with the legacy key, and every
+     *              heartbeat 500s against the missing coverage columns.
      */
     private static function ensure_videos_table() {
         global $wpdb;
@@ -490,7 +507,14 @@ class Anchor_Private_File_Manager {
             ) {$charset_collate};
         ");
 
-        return self::drop_legacy_views_key();
+        // Order matters: drop_legacy_views_key() first, so the legacy key is
+        // still never dropped before its replacement exists, then confirm the
+        // coverage columns actually landed.
+        $key_ok = self::drop_legacy_views_key();
+
+        return $key_ok
+            && self::views_column_exists('watched_bits')
+            && self::views_column_exists('duration_seconds');
     }
 
     /**
@@ -531,11 +555,19 @@ class Anchor_Private_File_Manager {
      *
      * resume_seconds, furthest_seconds, sessions and the timestamps are left
      * untouched.
+     *
+     * @return bool False when the UPDATE failed (an unknown column on a host
+     *              where dbDelta did not apply cleanly). The caller must not
+     *              bump the version on a false, or the reset never retries and
+     *              the stale pre-coverage percentages stand forever.
      */
     private static function reset_pre_coverage_watch_stats() {
         global $wpdb;
         $views = self::table('video_views');
-        $wpdb->query("UPDATE {$views} SET percent = 0, total_seconds = 0, watched_bits = NULL");
+        $result = $wpdb->query("UPDATE {$views} SET percent = 0, total_seconds = 0, watched_bits = NULL");
+        // query() returns int 0 when no rows matched -- an empty table, which
+        // is success. Only an exact false is a failure.
+        return $result !== false;
     }
 
     private function maybe_upgrade_db() {
@@ -549,7 +581,7 @@ class Anchor_Private_File_Manager {
             $views_ok = self::ensure_videos_table();
 
             if ($views_ok && $pre_coverage) {
-                self::reset_pre_coverage_watch_stats();
+                $views_ok = self::reset_pre_coverage_watch_stats();
             }
             if ($views_ok) {
                 update_option(self::OPT_DB_VERSION, self::VERSION);
