@@ -149,6 +149,17 @@ check('percent capped', $r4['percent'], 100);
 $r5 = Anchor_FM_Watch_Math::apply_progress($start, 5, 5, 0);
 check('zero duration percent', $r5['percent'], 0);
 
+// furthest_point($prev_furthest, $point_seconds, $duration_seconds)
+// The furthest position ever reached. No longer drives percent — that comes
+// from Anchor_FM_Coverage — but is still recorded.
+check('furthest first beat', Anchor_FM_Watch_Math::furthest_point(0, 30, 100), 30);
+check('furthest keeps max when user scrubs back', Anchor_FM_Watch_Math::furthest_point(30, 10, 100), 30);
+check('furthest advances', Anchor_FM_Watch_Math::furthest_point(30, 90, 100), 90);
+check('furthest clamped to duration', Anchor_FM_Watch_Math::furthest_point(0, 500, 100), 100);
+check('furthest unknown duration keeps point', Anchor_FM_Watch_Math::furthest_point(0, 500, 0), 500);
+check('furthest negative point ignored', Anchor_FM_Watch_Math::furthest_point(20, -5, 100), 20);
+check('furthest negative previous treated as zero', Anchor_FM_Watch_Math::furthest_point(-3, 10, 100), 10);
+
 require __DIR__ . '/../includes/class-afm-user-import.php';
 
 // --- Anchor_FM_User_Import::sanitize_username ---

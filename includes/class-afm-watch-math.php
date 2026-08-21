@@ -70,6 +70,26 @@ class Anchor_FM_Watch_Math {
     }
 
     /**
+     * The furthest position the viewer has ever reached.
+     *
+     * Kept as a factual record only. It deliberately does NOT drive the
+     * watch percentage any more: dragging the scrubber to the end moves this
+     * value without playing a frame, which is exactly the bug coverage
+     * tracking exists to fix. Percent comes from Anchor_FM_Coverage.
+     */
+    public static function furthest_point($prev_furthest, $point_seconds, $duration_seconds) {
+        $prev     = max(0, (int) $prev_furthest);
+        $point    = max(0, (int) $point_seconds);
+        $duration = max(0, (int) $duration_seconds);
+
+        $furthest = max($prev, $point);
+        if ($duration > 0 && $furthest > $duration) {
+            $furthest = $duration;
+        }
+        return $furthest;
+    }
+
+    /**
      * The playhead position worth storing for resume, or 0 for "start over".
      *
      * Deliberately separate from furthest_seconds: resume answers "where did
