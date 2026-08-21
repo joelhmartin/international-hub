@@ -26,6 +26,7 @@ function wp_remote_retrieve_body($res) { return isset($res['body']) ? $res['body
 
 require __DIR__ . '/../includes/class-afm-vimeo.php';
 require __DIR__ . '/../includes/class-afm-range.php';
+require __DIR__ . '/../includes/class-afm-coverage.php';
 
 $failures = 0;
 function check($label, $actual, $expected) {
@@ -322,6 +323,53 @@ check('stale empty string', Anchor_FM_Watch_Math::is_resume_stale('', $afm_now),
 check('stale zero date', Anchor_FM_Watch_Math::is_resume_stale('0000-00-00 00:00:00', $afm_now), true);
 check('stale garbage', Anchor_FM_Watch_Math::is_resume_stale('not a date', $afm_now), true);
 check('stale custom ttl', Anchor_FM_Watch_Math::is_resume_stale('2026-08-10 12:00:00', $afm_now, 5), true);
+
+// --- Anchor_FM_Coverage ---
+// Ranges are HALF-OPEN [from, to): mark(0,5) covers seconds 0,1,2,3,4.
+
+// The scenario this whole feature exists for, stated literally:
+// five seconds at the intro, five at the end of a 120s video, = 10 seconds.
+$cov = Anchor_FM_Coverage::mark('', 0, 5);
+$cov = Anchor_FM_Coverage::mark($cov, 115, 120);
+check('coverage two disjoint stretches', Anchor_FM_Coverage::count_set($cov), 10);
+$cov = Anchor_FM_Coverage::mark($cov, 0, 5); // re-watch the intro
+check('coverage rewatch adds nothing', Anchor_FM_Coverage::count_set($cov), 10);
+check('coverage percent of 120s video', Anchor_FM_Coverage::percent(10, 120), 8);
+
+check('coverage empty bitset', Anchor_FM_Coverage::count_set(''), 0);
+check('coverage single range', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 0, 5)), 5);
+check('coverage adjacent ranges do not double count',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark(Anchor_FM_Coverage::mark('', 0, 5), 5, 10)), 10);
+check('coverage overlapping ranges merge',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark(Anchor_FM_Coverage::mark('', 0, 10), 5, 15)), 15);
+check('coverage identical range twice',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark(Anchor_FM_Coverage::mark('', 3, 9), 3, 9)), 6);
+check('coverage reversed range rejected', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 9, 3)), 0);
+check('coverage zero-length range rejected', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 5, 5)), 0);
+check('coverage negative from clamps to zero', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', -10, 5)), 5);
+check('coverage byte boundary 7 to 9', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 7, 9)), 2);
+check('coverage spans many bytes', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 0, 100)), 100);
+check('coverage cap truncates tail', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 86395, 90000)), 5);
+check('coverage entirely beyond cap', Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark('', 90000, 90010)), 0);
+
+// mark_segments must survive whatever a client sends it.
+check('coverage segments applied',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', [[0,5],[10,15]])), 10);
+check('coverage segments empty list',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', [])), 0);
+check('coverage segments skip malformed',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', [[0,5], 'x', [3], null, [10,15]])), 10);
+check('coverage segments non-array input',
+    Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('', 'nope')), 0);
+
+// percent
+check('percent zero duration', Anchor_FM_Coverage::percent(50, 0), 0);
+check('percent half', Anchor_FM_Coverage::percent(60, 120), 50);
+check('percent floors', Anchor_FM_Coverage::percent(59, 120), 49);
+check('percent exact hundred', Anchor_FM_Coverage::percent(120, 120), 100);
+check('percent clamps above hundred', Anchor_FM_Coverage::percent(200, 120), 100);
+check('percent zero coverage', Anchor_FM_Coverage::percent(0, 120), 0);
+check('percent negative coverage', Anchor_FM_Coverage::percent(-5, 120), 0);
 
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
