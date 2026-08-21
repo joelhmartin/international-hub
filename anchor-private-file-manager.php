@@ -1071,6 +1071,49 @@ class Anchor_Private_File_Manager {
         return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$videos} WHERE id = %d", $video_id));
     }
 
+    /**
+     * The current user's watch percentage for a batch of items, keyed
+     * "<source>:<id>". One query for the whole folder — never one per row.
+     *
+     * Only ever reads the requesting user's own rows; no caller-supplied
+     * user id is accepted anywhere in this path.
+     */
+    private function watch_percent_map($video_ids, $file_ids) {
+        global $wpdb;
+        $user_id = get_current_user_id();
+        if ($user_id <= 0) return [];
+
+        $video_ids = array_values(array_filter(array_map('intval', (array) $video_ids)));
+        $file_ids  = array_values(array_filter(array_map('intval', (array) $file_ids)));
+        if (!$video_ids && !$file_ids) return [];
+
+        $views  = self::table('video_views');
+        $where  = [];
+        $params = [$user_id];
+
+        if ($video_ids) {
+            $where[] = "(source = %s AND video_id IN (" . implode(',', array_fill(0, count($video_ids), '%d')) . "))";
+            $params[] = Anchor_FM_Media_Progress::SOURCE_VIMEO;
+            foreach ($video_ids as $id) { $params[] = $id; }
+        }
+        if ($file_ids) {
+            $where[] = "(source = %s AND video_id IN (" . implode(',', array_fill(0, count($file_ids), '%d')) . "))";
+            $params[] = Anchor_FM_Media_Progress::SOURCE_FILE;
+            foreach ($file_ids as $id) { $params[] = $id; }
+        }
+
+        $sql = "SELECT source, video_id, percent FROM {$views}
+                WHERE user_id = %d AND (" . implode(' OR ', $where) . ")";
+
+        $rows = $wpdb->get_results(call_user_func_array([$wpdb, 'prepare'], array_merge([$sql], $params)));
+
+        $map = [];
+        foreach ((array) $rows as $r) {
+            $map[$r->source . ':' . (int) $r->video_id] = (int) $r->percent;
+        }
+        return $map;
+    }
+
     private function can_user_view_video($user_id, $video_id) {
         $video = $this->get_video_row($video_id);
         if (!$video) return false;
@@ -1674,6 +1717,30 @@ class Anchor_Private_File_Manager {
                     'createdAt' => $v->created_at,
                 ];
             }
+        }
+
+        $video_ids = [];
+        if (!empty($video_list)) {
+            foreach ($video_list as $v) { $video_ids[] = (int) $v['id']; }
+        }
+
+        $file_ids = [];
+        foreach ($file_list as $f) {
+            if (strpos((string) $f['mime'], 'video/') === 0) { $file_ids[] = (int) $f['id']; }
+        }
+
+        $watch = $this->watch_percent_map($video_ids, $file_ids);
+
+        if (!empty($video_list)) {
+            foreach ($video_list as $i => $v) {
+                $key = Anchor_FM_Media_Progress::SOURCE_VIMEO . ':' . (int) $v['id'];
+                if (isset($watch[$key])) { $video_list[$i]['watchPercent'] = $watch[$key]; }
+            }
+        }
+        foreach ($file_list as $i => $f) {
+            if (strpos((string) $f['mime'], 'video/') !== 0) continue;
+            $key = Anchor_FM_Media_Progress::SOURCE_FILE . ':' . (int) $f['id'];
+            if (isset($watch[$key])) { $file_list[$i]['watchPercent'] = $watch[$key]; }
         }
 
         $cap = $folder_id === 0 ? (user_can($user_id, 'administrator') ? 'manage' : 'view') : $this->get_effective_capability($user_id, 'folder', $folder_id);

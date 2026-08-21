@@ -234,6 +234,23 @@ jQuery(function ($) {
         $breadcrumbs.html(html);
     }
 
+    // Small progress ring. r=8 so the circumference is 2*pi*8 = 50.27; the
+    // dash offset is the unfilled remainder.
+    function watchRing(pct) {
+        const p = Math.max(0, Math.min(100, Number(pct)));
+        if (!isFinite(p)) return '';
+        const c = 50.27;
+        const offset = (c * (100 - p) / 100).toFixed(2);
+        const label = p + '% watched';
+        return `<span class="afm__watchRing" title="${esc(label)}" aria-label="${esc(label)}">
+            <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" focusable="false">
+                <circle class="afm__watchRingTrack" cx="10" cy="10" r="8" fill="none" stroke-width="3"></circle>
+                <circle class="afm__watchRingFill" cx="10" cy="10" r="8" fill="none" stroke-width="3"
+                        stroke-dasharray="${c}" stroke-dashoffset="${offset}"
+                        transform="rotate(-90 10 10)"></circle>
+            </svg><span class="afm__watchPct">${esc(p)}%</span></span>`;
+    }
+
     function iconForMime(mime) {
         if (!mime) return 'media-default';
         if (mime.startsWith('image/')) return 'format-image';
@@ -342,9 +359,9 @@ jQuery(function ($) {
     function currentRows(list) {
         const rows = [];
         (list.folders || []).forEach(f => rows.push({ kind: 'folder', id: f.id, name: f.name, isPrivate: f.isPrivate }));
-        (list.videos || []).forEach(v => rows.push({ kind: 'video', id: v.id, name: v.title, vimeoId: v.vimeoId, vimeoHash: v.vimeoHash, thumbnailUrl: v.thumbnailUrl, createdAt: v.createdAt }));
+        (list.videos || []).forEach(v => rows.push({ kind: 'video', id: v.id, name: v.title, vimeoId: v.vimeoId, vimeoHash: v.vimeoHash, thumbnailUrl: v.thumbnailUrl, createdAt: v.createdAt, watchPercent: v.watchPercent }));
         (list.links || []).forEach(l => rows.push({ kind: 'link', id: l.id, name: l.title, url: l.url, createdAt: l.createdAt }));
-        (list.files || []).forEach(f => rows.push({ kind: 'file', id: f.id, name: f.name, mime: f.mime, size: f.size, createdAt: f.createdAt }));
+        (list.files || []).forEach(f => rows.push({ kind: 'file', id: f.id, name: f.name, mime: f.mime, size: f.size, createdAt: f.createdAt, watchPercent: f.watchPercent }));
         return rows;
     }
 
@@ -385,6 +402,7 @@ jQuery(function ($) {
                     ${disclosure}
                     ${rowIconHtml(item)}
                     <span class="afm__rowLabel" data-afm-row-label>${esc(item.name)}</span>
+                    ${(typeof item.watchPercent === 'number') ? watchRing(item.watchPercent) : ''}
                 </div>
                 <div class="afm__rowCell afm__rowKind">${esc(kindLabel(item.kind, item.mime))}</div>
                 <div class="afm__rowCell afm__rowSize">${sizeText}</div>
