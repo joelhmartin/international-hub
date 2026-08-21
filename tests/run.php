@@ -159,6 +159,7 @@ check('furthest clamped to duration', Anchor_FM_Watch_Math::furthest_point(0, 50
 check('furthest unknown duration keeps point', Anchor_FM_Watch_Math::furthest_point(0, 500, 0), 500);
 check('furthest negative point ignored', Anchor_FM_Watch_Math::furthest_point(20, -5, 100), 20);
 check('furthest negative previous treated as zero', Anchor_FM_Watch_Math::furthest_point(-3, 10, 100), 10);
+check('furthest never goes backwards when duration shrinks', Anchor_FM_Watch_Math::furthest_point(500, 20, 100), 500);
 
 require __DIR__ . '/../includes/class-afm-user-import.php';
 

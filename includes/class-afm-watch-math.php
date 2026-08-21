@@ -76,17 +76,28 @@ class Anchor_FM_Watch_Math {
      * watch percentage any more: dragging the scrubber to the end moves this
      * value without playing a frame, which is exactly the bug coverage
      * tracking exists to fix. Percent comes from Anchor_FM_Coverage.
+     *
+     * This is a high-water mark: it never goes backwards. A later discovery
+     * of duration cannot retroactively shrink a position already recorded as fact.
+     *
+     * @param int $prev_furthest   previously recorded high-water mark
+     * @param int $point_seconds   current playhead position
+     * @param int $duration_seconds total video length, 0 when unknown
+     * @return int                 maximum of $prev_furthest and the (clamped) point
      */
     public static function furthest_point($prev_furthest, $point_seconds, $duration_seconds) {
         $prev     = max(0, (int) $prev_furthest);
         $point    = max(0, (int) $point_seconds);
         $duration = max(0, (int) $duration_seconds);
 
-        $furthest = max($prev, $point);
-        if ($duration > 0 && $furthest > $duration) {
-            $furthest = $duration;
+        // Clamp the incoming point only. Clamping the result would let a
+        // later, smaller, newly-known duration retroactively shrink a value
+        // already recorded as fact — and this is a high-water mark, so it
+        // must never go backwards.
+        if ($duration > 0 && $point > $duration) {
+            $point = $duration;
         }
-        return $furthest;
+        return max($prev, $point);
     }
 
     /**
