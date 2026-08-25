@@ -11,8 +11,10 @@ The plugin used to store uploaded client files under
 visitors — every file downloadable by anyone who knew or guessed the URL, with
 no login and nothing in the plugin's activity log.
 
-This was found and fixed on tmjtherapycentre.com on 2026-08-21. Any other site
-running this plugin is still exposed until the two steps below are done there.
+This was found and fixed on tmjtherapycentre.com on 2026-08-21, which is the
+only site running this plugin. **No install is currently exposed.** The steps
+below are what any future install must do, and the verification section is how
+you confirm it.
 
 ## Required on every site
 
