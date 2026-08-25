@@ -366,6 +366,21 @@ jQuery(function ($) {
         return rows;
     }
 
+    const naturalNameCollator = window.Intl && window.Intl.Collator
+        ? new window.Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+        : null;
+
+    function compareNames(a, b) {
+        let av = String(a || '');
+        let bv = String(b || '');
+        if (naturalNameCollator) return naturalNameCollator.compare(av, bv);
+        av = av.toLowerCase();
+        bv = bv.toLowerCase();
+        if (av < bv) return -1;
+        if (av > bv) return 1;
+        return 0;
+    }
+
     function sortRows(rows) {
         const dir = state.sortDir === 'desc' ? -1 : 1;
         const folderRank = r => (r.kind === 'folder' ? 0 : 1);
@@ -376,11 +391,11 @@ jQuery(function ($) {
                 case 'size': av = a.size || 0; bv = b.size || 0; break;
                 case 'kind': av = kindLabel(a.kind, a.mime); bv = kindLabel(b.kind, b.mime); break;
                 case 'modified': av = a.createdAt || ''; bv = b.createdAt || ''; break;
-                default: av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase();
+                default: return compareNames(a.name, b.name) * dir;
             }
             if (av < bv) return -1 * dir;
             if (av > bv) return 1 * dir;
-            return 0;
+            return compareNames(a.name, b.name);
         });
     }
 
@@ -429,7 +444,7 @@ jQuery(function ($) {
     function renderRowTree(item, depth) {
         let html = rowHtml(item, depth);
         if (item.kind === 'folder' && state.expandedRows[item.id]) {
-            state.expandedRows[item.id].forEach(child => { html += renderRowTree(child, depth + 1); });
+            sortRows(state.expandedRows[item.id]).forEach(child => { html += renderRowTree(child, depth + 1); });
         }
         return html;
     }
