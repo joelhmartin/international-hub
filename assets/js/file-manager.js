@@ -42,6 +42,7 @@ jQuery(function ($) {
         selectedEntity: null,
         rolesDraft: [],
         usersDraft: [],
+        policyDraft: { operator: 'any', rules: [] },
         modalMode: '',
         modalPayload: null,
         menuContext: null,
@@ -489,6 +490,8 @@ jQuery(function ($) {
         $root.removeClass('afm--modalOpen');
         state.selectedEntity = null;
         state.rolesDraft = [];
+        state.usersDraft = [];
+        state.policyDraft = { operator: 'any', rules: [] };
         state.modalMode = '';
         state.modalPayload = null;
         $modalBody.html('');
@@ -1248,47 +1251,206 @@ jQuery(function ($) {
             }
             state.rolesDraft = Array.isArray(res.data.roles) ? res.data.roles.slice() : [];
             state.usersDraft = Array.isArray(res.data.users) ? res.data.users.slice() : [];
+            state.policyDraft = normalizePolicyDraft(res.data.policy || { operator: 'any', rules: [] });
             renderPermissionsEditor();
         });
+    }
+
+    function normalizePermOperator(value) {
+        return String(value || '').toLowerCase() === 'all' ? 'all' : 'any';
+    }
+
+    function permissionRoles() {
+        return Array.isArray(AnchorFM.roles) ? AnchorFM.roles : [];
+    }
+
+    function defaultPermissionCondition(type) {
+        const roles = permissionRoles();
+        type = type || 'role';
+        if (type === 'date') return { type: 'date', start: '', end: '' };
+        if (type === 'user') return { type: 'user', userId: '', name: '' };
+        return { type: 'role', role: roles.length ? String(roles[0].key) : '' };
+    }
+
+    function normalizePolicyDraft(policy) {
+        policy = policy && typeof policy === 'object' ? policy : {};
+        const rules = Array.isArray(policy.rules) ? policy.rules : [];
+        return {
+            operator: normalizePermOperator(policy.operator),
+            rules: rules.map(rule => {
+                rule = rule && typeof rule === 'object' ? rule : {};
+                const conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
+                return {
+                    operator: normalizePermOperator(rule.operator || 'all'),
+                    conditions: conditions.map(condition => {
+                        condition = condition && typeof condition === 'object' ? condition : {};
+                        const type = String(condition.type || 'role');
+                        if (type === 'date') {
+                            return { type: 'date', start: String(condition.start || ''), end: String(condition.end || '') };
+                        }
+                        if (type === 'user') {
+                            return { type: 'user', userId: String(condition.userId || condition.id || ''), name: String(condition.name || '') };
+                        }
+                        return { type: 'role', role: String(condition.role || '') };
+                    }),
+                };
+            }),
+        };
+    }
+
+    function readPolicyFromEditor() {
+        const policy = {
+            operator: normalizePermOperator($modalBody.find('[data-afm-perm-policy-op]').val()),
+            rules: [],
+        };
+        $modalBody.find('[data-afm-perm-rule]').each(function () {
+            const $rule = $(this);
+            const rule = {
+                operator: normalizePermOperator($rule.find('[data-afm-rule-op]').val()),
+                conditions: [],
+            };
+            $rule.find('[data-afm-perm-condition]').each(function () {
+                const $condition = $(this);
+                const type = String($condition.find('[data-afm-cond-type]').val() || 'role');
+                if (type === 'date') {
+                    rule.conditions.push({
+                        type: 'date',
+                        start: String($condition.find('[data-afm-cond-start]').val() || ''),
+                        end: String($condition.find('[data-afm-cond-end]').val() || ''),
+                    });
+                } else if (type === 'user') {
+                    rule.conditions.push({
+                        type: 'user',
+                        userId: String($condition.find('[data-afm-cond-user-id]').val() || ''),
+                    });
+                } else {
+                    rule.conditions.push({
+                        type: 'role',
+                        role: String($condition.find('[data-afm-cond-role]').val() || ''),
+                    });
+                }
+            });
+            policy.rules.push(rule);
+        });
+        return normalizePolicyDraft(policy);
+    }
+
+    function roleOptions(selectedRole) {
+        const roles = permissionRoles();
+        if (!roles.length) return '<option value="">No roles</option>';
+        return roles.map(r => `<option value="${esc(r.key)}" ${String(selectedRole || '') === String(r.key) ? 'selected' : ''}>${esc(r.label)}</option>`).join('');
+    }
+
+    function renderPermissionCondition(condition, ruleIdx, conditionIdx) {
+        const type = String(condition.type || 'role');
+        const typedControl = type === 'date'
+            ? `<div class="afm__dateRange">
+                    <input type="date" class="afm__input" value="${esc(condition.start || '')}" data-afm-cond-start>
+                    <input type="date" class="afm__input" value="${esc(condition.end || '')}" data-afm-cond-end>
+               </div>`
+            : type === 'user'
+                ? `<input type="number" min="1" class="afm__input" placeholder="User ID" value="${esc(condition.userId || '')}" data-afm-cond-user-id>`
+                : `<select class="afm__select" data-afm-cond-role>${roleOptions(condition.role)}</select>`;
+
+        return `
+            <div class="afm__permCondition" data-afm-perm-condition data-afm-condition-idx="${conditionIdx}">
+                <select class="afm__select" data-afm-cond-type>
+                    <option value="role" ${type === 'role' ? 'selected' : ''}>Role</option>
+                    <option value="date" ${type === 'date' ? 'selected' : ''}>Date range</option>
+                    <option value="user" ${type === 'user' ? 'selected' : ''}>User</option>
+                </select>
+                ${typedControl}
+                <button type="button" class="afm__iconBtn" data-afm-action="remove-perm-condition" data-afm-rule-idx="${ruleIdx}" data-afm-condition-idx="${conditionIdx}" aria-label="Remove condition">
+                    <span class="dashicons dashicons-no-alt" aria-hidden="true"></span>
+                </button>
+            </div>
+        `;
+    }
+
+    function renderPermissionRule(rule, idx) {
+        const conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
+        return `
+            <div class="afm__permRule" data-afm-perm-rule data-afm-rule-idx="${idx}">
+                <div class="afm__permRuleHead">
+                    <div class="afm__permRuleTitle">Rule ${idx + 1}</div>
+                    <select class="afm__select" data-afm-rule-op>
+                        <option value="all" ${normalizePermOperator(rule.operator) === 'all' ? 'selected' : ''}>All conditions</option>
+                        <option value="any" ${normalizePermOperator(rule.operator) === 'any' ? 'selected' : ''}>Any condition</option>
+                    </select>
+                    <button type="button" class="afm__iconBtn" data-afm-action="remove-perm-rule" data-afm-rule-idx="${idx}" aria-label="Remove rule">
+                        <span class="dashicons dashicons-trash" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <div class="afm__permConditions">
+                    ${conditions.length ? conditions.map((condition, conditionIdx) => renderPermissionCondition(condition, idx, conditionIdx)).join('') : `<div class="afm__empty afm__empty--tight">No conditions in this rule.</div>`}
+                </div>
+                <div class="afm__permActions">
+                    <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-perm-condition" data-afm-rule-idx="${idx}" data-afm-condition-type="role">Add role</button>
+                    <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-perm-condition" data-afm-rule-idx="${idx}" data-afm-condition-type="date">Add date</button>
+                    <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-perm-condition" data-afm-rule-idx="${idx}" data-afm-condition-type="user">Add user</button>
+                </div>
+            </div>
+        `;
     }
 
     function renderPermissionsEditor() {
         const roles = Array.isArray(AnchorFM.roles) ? AnchorFM.roles : [];
         const selected = new Set((state.rolesDraft || []).map(r => String(r)));
         const users = Array.isArray(state.usersDraft) ? state.usersDraft : [];
+        const policy = normalizePolicyDraft(state.policyDraft);
 
         const html = `
             <div class="afm__permWrap">
-                <div class="afm__help">Select which roles or users can view this ${esc(state.selectedEntity ? state.selectedEntity.entityType : 'item')}. Admins always have access.</div>
-                <div class="afm__permList">
-                    ${roles.length ? roles.map(r => `
-                        <label class="afm__permRow">
-                            <input type="checkbox" class="afm__checkbox" data-afm-role="${esc(r.key)}" ${selected.has(r.key) ? 'checked' : ''}>
-                            <span class="afm__permLabel">${esc(r.label)}</span>
-                            <span class="afm__mono">${esc(r.key)}</span>
-                        </label>
-                    `).join('') : `<div class="afm__empty afm__empty--tight">No roles available.</div>`}
-                </div>
+                <div class="afm__help">Admins always have access.</div>
 
-                <div class="afm__fieldRow">
-                    <label class="afm__label">Add user access</label>
-                    <div class="afm__fieldInline">
-                        <input type="text" class="afm__input" placeholder="Search users" data-afm-user-search>
-                        <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-user-perm">Add</button>
+                <div class="afm__permSection">
+                    <div class="afm__sectionTitle">Always allowed</div>
+                    <div class="afm__permList">
+                        ${roles.length ? roles.map(r => `
+                            <label class="afm__permRow">
+                                <input type="checkbox" class="afm__checkbox" data-afm-role="${esc(r.key)}" ${selected.has(r.key) ? 'checked' : ''}>
+                                <span class="afm__permLabel">${esc(r.label)}</span>
+                                <span class="afm__mono">${esc(r.key)}</span>
+                            </label>
+                        `).join('') : `<div class="afm__empty afm__empty--tight">No roles available.</div>`}
                     </div>
-                    <div class="afm__suggest" data-afm-suggest hidden></div>
+
+                    <div class="afm__fieldRow">
+                        <label class="afm__label">Add user access</label>
+                        <div class="afm__fieldInline">
+                            <input type="text" class="afm__input" placeholder="Search users" data-afm-user-search>
+                            <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-user-perm">Add</button>
+                        </div>
+                        <div class="afm__suggest" data-afm-suggest hidden></div>
+                    </div>
+
+                    <div class="afm__permList">
+                        ${users.length ? users.map((u, idx) => `
+                            <div class="afm__permRow">
+                                <span class="afm__permLabel">${esc(u.name || u.id)}</span>
+                                <span class="afm__mono">${esc(u.id)}</span>
+                                <button type="button" class="afm__iconBtn" data-afm-action="remove-user-perm" data-afm-user-idx="${idx}" aria-label="Remove">
+                                    <span class="dashicons dashicons-trash" aria-hidden="true"></span>
+                                </button>
+                            </div>
+                        `).join('') : `<div class="afm__empty afm__empty--tight">No individual users added.</div>`}
+                    </div>
                 </div>
 
-                <div class="afm__permList">
-                    ${users.length ? users.map((u, idx) => `
-                        <div class="afm__permRow">
-                            <span class="afm__permLabel">${esc(u.name || u.id)}</span>
-                            <span class="afm__mono">${esc(u.id)}</span>
-                            <button type="button" class="afm__iconBtn" data-afm-action="remove-user-perm" data-afm-user-idx="${idx}" aria-label="Remove">
-                                <span class="dashicons dashicons-trash" aria-hidden="true"></span>
-                            </button>
-                        </div>
-                    `).join('') : `<div class="afm__empty afm__empty--tight">No individual users added.</div>`}
+                <div class="afm__permSection">
+                    <div class="afm__permSectionHead">
+                        <div class="afm__sectionTitle">Rules</div>
+                        <select class="afm__select" data-afm-perm-policy-op>
+                            <option value="any" ${policy.operator === 'any' ? 'selected' : ''}>Any rule</option>
+                            <option value="all" ${policy.operator === 'all' ? 'selected' : ''}>All rules</option>
+                        </select>
+                    </div>
+                    <div class="afm__permRules">
+                        ${policy.rules.length ? policy.rules.map((rule, idx) => renderPermissionRule(rule, idx)).join('') : `<div class="afm__empty afm__empty--tight">No rules added.</div>`}
+                    </div>
+                    <div class="afm__permActions">
+                        <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="add-perm-rule">Add rule</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -1302,10 +1464,13 @@ jQuery(function ($) {
             const $cb = $(this);
             if ($cb.is(':checked')) roles.push(String($cb.data('afm-role')));
         });
+        state.policyDraft = readPolicyFromEditor();
         api('anchor_fm_set_permissions', {
             entity_type: state.selectedEntity.entityType,
             entity_id: state.selectedEntity.entityId,
             roles,
+            users: state.usersDraft,
+            policy: JSON.stringify(state.policyDraft),
         }).done(res => {
             if (!res || !res.success) return;
             closeModal();
@@ -2683,6 +2848,63 @@ jQuery(function ($) {
         if (!term) return;
         if (/^\d+$/.test(term)) {
             state.usersDraft.push({ id: term, name: term });
+            renderPermissionsEditor();
+        }
+    });
+
+    $root.on('change input', '[data-afm-perm-policy-op], [data-afm-rule-op], [data-afm-cond-role], [data-afm-cond-start], [data-afm-cond-end], [data-afm-cond-user-id]', function () {
+        if (state.modalMode !== 'save-permissions') return;
+        state.policyDraft = readPolicyFromEditor();
+    });
+
+    $root.on('change', '[data-afm-cond-type]', function () {
+        if (state.modalMode !== 'save-permissions') return;
+        const $condition = $(this).closest('[data-afm-perm-condition]');
+        const $rule = $(this).closest('[data-afm-perm-rule]');
+        const ruleIdx = Number($rule.data('afm-rule-idx'));
+        const conditionIdx = Number($condition.data('afm-condition-idx'));
+        const type = String($(this).val() || 'role');
+        state.policyDraft = readPolicyFromEditor();
+        if (state.policyDraft.rules[ruleIdx] && state.policyDraft.rules[ruleIdx].conditions[conditionIdx]) {
+            state.policyDraft.rules[ruleIdx].conditions[conditionIdx] = defaultPermissionCondition(type);
+        }
+        renderPermissionsEditor();
+    });
+
+    $root.on('click', '[data-afm-action="add-perm-rule"]', function () {
+        state.policyDraft = readPolicyFromEditor();
+        state.policyDraft.rules.push({
+            operator: 'all',
+            conditions: [defaultPermissionCondition('role')],
+        });
+        renderPermissionsEditor();
+    });
+
+    $root.on('click', '[data-afm-action="remove-perm-rule"]', function () {
+        state.policyDraft = readPolicyFromEditor();
+        const idx = Number($(this).data('afm-rule-idx'));
+        if (idx >= 0 && state.policyDraft.rules[idx]) {
+            state.policyDraft.rules.splice(idx, 1);
+            renderPermissionsEditor();
+        }
+    });
+
+    $root.on('click', '[data-afm-action="add-perm-condition"]', function () {
+        state.policyDraft = readPolicyFromEditor();
+        const idx = Number($(this).data('afm-rule-idx'));
+        const type = String($(this).data('afm-condition-type') || 'role');
+        if (idx >= 0 && state.policyDraft.rules[idx]) {
+            state.policyDraft.rules[idx].conditions.push(defaultPermissionCondition(type));
+            renderPermissionsEditor();
+        }
+    });
+
+    $root.on('click', '[data-afm-action="remove-perm-condition"]', function () {
+        state.policyDraft = readPolicyFromEditor();
+        const ruleIdx = Number($(this).data('afm-rule-idx'));
+        const conditionIdx = Number($(this).data('afm-condition-idx'));
+        if (ruleIdx >= 0 && conditionIdx >= 0 && state.policyDraft.rules[ruleIdx]) {
+            state.policyDraft.rules[ruleIdx].conditions.splice(conditionIdx, 1);
             renderPermissionsEditor();
         }
     });

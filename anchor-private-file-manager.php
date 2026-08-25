@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.12.0
+ * Version: 2.13.1
  * Author: Anchor Corps
  */
 
@@ -14,10 +14,11 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-media-progress.php'
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.12.0';
+    const VERSION = '2.13.1';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -263,6 +264,7 @@ class Anchor_Private_File_Manager {
         $folders = self::table('folders');
         $files = self::table('files');
         $perms = self::table('permissions');
+        $policies = self::table('permission_policies');
         $activity = self::table('activity');
         // Note: comments intentionally removed in v2.1+; table kept out of new installs.
 
@@ -319,6 +321,24 @@ class Anchor_Private_File_Manager {
         ");
 
         dbDelta("
+            CREATE TABLE {$policies} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                entity_type VARCHAR(10) NOT NULL,
+                entity_id BIGINT(20) UNSIGNED NOT NULL,
+                capability VARCHAR(10) NOT NULL,
+                policy LONGTEXT NULL,
+                created_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                UNIQUE KEY entity_capability (entity_type, entity_id, capability),
+                KEY entity (entity_type, entity_id),
+                KEY capability (capability)
+            ) {$charset_collate};
+        ");
+
+        dbDelta("
             CREATE TABLE {$activity} (
                 id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
                 actor_user_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
@@ -342,10 +362,11 @@ class Anchor_Private_File_Manager {
         self::ensure_upload_storage();
         self::ensure_product_docs_folder();
         self::ensure_links_table();
+        $policies_ok = self::ensure_permission_policies_table();
         // Bump only after the schema work, and only if it succeeded — see
         // maybe_upgrade_db(). A premature bump strands the site on the legacy
         // (video_id, user_id) unique key with no retry.
-        if (self::ensure_videos_table()) {
+        if ($policies_ok && self::ensure_videos_table()) {
             update_option(self::OPT_DB_VERSION, self::VERSION);
         }
 
@@ -378,6 +399,43 @@ class Anchor_Private_File_Manager {
     private static function table($suffix) {
         global $wpdb;
         return $wpdb->prefix . 'anchor_fm_' . $suffix;
+    }
+
+    private static function table_exists($table) {
+        global $wpdb;
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM information_schema.TABLES
+             WHERE table_schema = DATABASE() AND table_name = %s",
+            $table
+        )) > 0;
+    }
+
+    private static function ensure_permission_policies_table() {
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+        $policies = self::table('permission_policies');
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        dbDelta("
+            CREATE TABLE {$policies} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                entity_type VARCHAR(10) NOT NULL,
+                entity_id BIGINT(20) UNSIGNED NOT NULL,
+                capability VARCHAR(10) NOT NULL,
+                policy LONGTEXT NULL,
+                created_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                UNIQUE KEY entity_capability (entity_type, entity_id, capability),
+                KEY entity (entity_type, entity_id),
+                KEY capability (capability)
+            ) {$charset_collate};
+        ");
+
+        return self::table_exists($policies);
     }
 
     private static function ensure_product_docs_folder() {
@@ -578,12 +636,13 @@ class Anchor_Private_File_Manager {
             $pre_coverage = version_compare($installed, '2.12.0', '<');
 
             self::ensure_links_table();
+            $policies_ok = self::ensure_permission_policies_table();
             $views_ok = self::ensure_videos_table();
 
             if ($views_ok && $pre_coverage) {
                 $views_ok = self::reset_pre_coverage_watch_stats();
             }
-            if ($views_ok) {
+            if ($views_ok && $policies_ok) {
                 update_option(self::OPT_DB_VERSION, self::VERSION);
             }
         }
@@ -1017,18 +1076,35 @@ class Anchor_Private_File_Manager {
             return true;
         }
 
-        $roles = $this->user_roles_lower($user_id);
-        $role_keys = $roles ? array_map('sanitize_key', $roles) : [];
-        if (!$role_keys) return false;
-
         global $wpdb;
         $perms = self::table('permissions');
-        $placeholders = implode(',', array_fill(0, count($role_keys), '%s'));
-        $query = "SELECT COUNT(1) FROM {$perms} WHERE subject_type = 'role' AND capability = 'view' AND subject_key IN ({$placeholders})";
-        $args = array_merge([$query], $role_keys);
-        $sql = call_user_func_array([$wpdb, 'prepare'], $args);
-        $count = (int) $wpdb->get_var($sql);
-        return $count > 0;
+        $user_count = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM {$perms} WHERE subject_type = 'user' AND capability = 'view' AND subject_key = %s",
+            (string) (int) $user_id
+        ));
+        if ($user_count > 0) return true;
+
+        $roles = $this->user_roles_lower($user_id);
+        $role_keys = $roles ? array_map('sanitize_key', $roles) : [];
+        if ($role_keys) {
+            $placeholders = implode(',', array_fill(0, count($role_keys), '%s'));
+            $query = "SELECT COUNT(1) FROM {$perms} WHERE subject_type = 'role' AND capability = 'view' AND subject_key IN ({$placeholders})";
+            $args = array_merge([$query], $role_keys);
+            $sql = call_user_func_array([$wpdb, 'prepare'], $args);
+            $count = (int) $wpdb->get_var($sql);
+            if ($count > 0) return true;
+        }
+
+        $policies = self::table('permission_policies');
+        $rows = $wpdb->get_col("SELECT policy FROM {$policies} WHERE capability = 'view'");
+        foreach ((array) $rows as $raw) {
+            $policy = $this->normalize_permission_policy($raw);
+            if (Anchor_FM_Permission_Policy::evaluate($policy, $this->permission_policy_context($user_id), current_time('Y-m-d'))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function get_storage_dir() {
@@ -1077,6 +1153,91 @@ class Anchor_Private_File_Manager {
         $u = get_user_by('id', $user_id);
         if (!$u) return [];
         return array_values(array_map('strtolower', (array) $u->roles));
+    }
+
+    private function get_valid_permission_role_keys() {
+        $roles = array_keys((array) wp_roles()->roles);
+        $roles = array_map('sanitize_key', $roles);
+        return array_values(array_filter(array_unique($roles), function ($role) {
+            return $role !== '' && $role !== 'administrator';
+        }));
+    }
+
+    private function normalize_permission_policy($policy) {
+        return Anchor_FM_Permission_Policy::normalize($policy, $this->get_valid_permission_role_keys());
+    }
+
+    private function permission_policy_context($user_id) {
+        return [
+            'userId' => (int) $user_id,
+            'roles' => array_map('sanitize_key', $this->user_roles_lower($user_id)),
+        ];
+    }
+
+    private function get_permission_policy($entity_type, $entity_id, $capability = 'view') {
+        global $wpdb;
+        $policies = self::table('permission_policies');
+        $raw = $wpdb->get_var($wpdb->prepare(
+            "SELECT policy FROM {$policies} WHERE entity_type = %s AND entity_id = %d AND capability = %s",
+            $entity_type,
+            $entity_id,
+            $capability
+        ));
+        return $this->normalize_permission_policy($raw ?: []);
+    }
+
+    private function permission_policy_matches($user_id, $entity_type, $entity_id, $capability = 'view') {
+        $policy = $this->get_permission_policy($entity_type, $entity_id, $capability);
+        if (Anchor_FM_Permission_Policy::rule_count($policy) <= 0) {
+            return false;
+        }
+        return Anchor_FM_Permission_Policy::evaluate(
+            $policy,
+            $this->permission_policy_context($user_id),
+            current_time('Y-m-d')
+        );
+    }
+
+    private function save_permission_policy($entity_type, $entity_id, $capability, $policy, $user_id) {
+        global $wpdb;
+        $policies = self::table('permission_policies');
+        $policy = $this->normalize_permission_policy($policy);
+
+        if (Anchor_FM_Permission_Policy::rule_count($policy) <= 0) {
+            $wpdb->delete($policies, [
+                'entity_type' => $entity_type,
+                'entity_id' => $entity_id,
+                'capability' => $capability,
+            ], ['%s','%d','%s']);
+            return $policy;
+        }
+
+        $now = current_time('mysql');
+        $wpdb->replace($policies, [
+            'entity_type' => $entity_type,
+            'entity_id' => $entity_id,
+            'capability' => $capability,
+            'policy' => wp_json_encode($policy),
+            'created_by' => $user_id,
+            'created_at' => $now,
+            'updated_by' => $user_id,
+            'updated_at' => $now,
+        ], ['%s','%d','%s','%s','%d','%s','%d','%s']);
+
+        return $policy;
+    }
+
+    private function enrich_permission_policy_for_response(array $policy) {
+        foreach ($policy['rules'] as $rule_index => $rule) {
+            foreach ($rule['conditions'] as $condition_index => $condition) {
+                if (isset($condition['type']) && $condition['type'] === 'user') {
+                    $uid = isset($condition['userId']) ? (int) $condition['userId'] : 0;
+                    $u = $uid > 0 ? get_user_by('id', $uid) : null;
+                    $policy['rules'][$rule_index]['conditions'][$condition_index]['name'] = $u ? $u->display_name : (string) $uid;
+                }
+            }
+        }
+        return $policy;
     }
 
     private function get_folder_row($folder_id) {
@@ -1236,6 +1397,10 @@ class Anchor_Private_File_Manager {
             $best = max($best, $this->cap_rank($cap));
         }
 
+        if ($this->permission_policy_matches($user_id, $entity_type, $entity_id, 'view')) {
+            $best = max($best, $this->cap_rank('view'));
+        }
+
         // Role-specific
         if ($role_keys) {
             $placeholders = implode(',', array_fill(0, count($role_keys), '%s'));
@@ -1259,12 +1424,21 @@ class Anchor_Private_File_Manager {
             $entity_type,
             $entity_id
         ));
-        return $count > 0;
+        if ($count > 0) return true;
+
+        $policies = self::table('permission_policies');
+        $policy_count = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(1) FROM {$policies} WHERE entity_type = %s AND entity_id = %d AND capability = 'view'",
+            $entity_type,
+            $entity_id
+        ));
+        return $policy_count > 0;
     }
 
     private function copy_view_permissions($from_type, $from_id, $to_type, $to_id, $overwrite = false) {
         global $wpdb;
         $perms = self::table('permissions');
+        $policies = self::table('permission_policies');
 
         if (!$overwrite && $this->entity_has_view_permissions($to_type, $to_id)) {
             return;
@@ -1281,11 +1455,14 @@ class Anchor_Private_File_Manager {
             'entity_id' => $to_id,
             'capability' => 'view',
         ], ['%s','%d','%s']);
-
-        if (!$rows) return;
+        $wpdb->delete($policies, [
+            'entity_type' => $to_type,
+            'entity_id' => $to_id,
+            'capability' => 'view',
+        ], ['%s','%d','%s']);
 
         $now = current_time('mysql');
-        foreach ($rows as $r) {
+        foreach ((array) $rows as $r) {
             $wpdb->insert($perms, [
                 'entity_type' => $to_type,
                 'entity_id' => $to_id,
@@ -1295,6 +1472,25 @@ class Anchor_Private_File_Manager {
                 'created_by' => get_current_user_id(),
                 'created_at' => $now,
             ], ['%s','%d','%s','%s','%s','%d','%s']);
+        }
+
+        $policy = $wpdb->get_var($wpdb->prepare(
+            "SELECT policy FROM {$policies} WHERE entity_type = %s AND entity_id = %d AND capability = 'view'",
+            $from_type,
+            $from_id
+        ));
+        $policy = $this->normalize_permission_policy($policy ?: []);
+        if (Anchor_FM_Permission_Policy::rule_count($policy) > 0) {
+            $wpdb->insert($policies, [
+                'entity_type' => $to_type,
+                'entity_id' => $to_id,
+                'capability' => 'view',
+                'policy' => wp_json_encode($policy),
+                'created_by' => get_current_user_id(),
+                'created_at' => $now,
+                'updated_by' => get_current_user_id(),
+                'updated_at' => $now,
+            ], ['%s','%d','%s','%s','%d','%s','%d','%s']);
         }
     }
 
@@ -3319,6 +3515,7 @@ class Anchor_Private_File_Manager {
         $this->json_success([
             'roles' => array_values(array_unique($roles)),
             'users' => $users,
+            'policy' => $this->enrich_permission_policy_for_response($this->get_permission_policy($entity_type, $entity_id, 'view')),
         ]);
     }
 
@@ -3331,6 +3528,14 @@ class Anchor_Private_File_Manager {
         $entity_id = isset($_POST['entity_id']) ? (int) $_POST['entity_id'] : 0;
         $roles = isset($_POST['roles']) ? (array) $_POST['roles'] : [];
         $users = isset($_POST['users']) ? (array) $_POST['users'] : [];
+        $policy_input = [];
+        if (isset($_POST['policy'])) {
+            $policy_input = wp_unslash($_POST['policy']);
+            if (is_string($policy_input)) {
+                $decoded = json_decode($policy_input, true);
+                $policy_input = is_array($decoded) ? $decoded : [];
+            }
+        }
         if (!in_array($entity_type, ['file', 'folder'], true) || $entity_id <= 0) $this->json_error('Missing fields');
 
         $allowed = $entity_type === 'file'
@@ -3338,18 +3543,28 @@ class Anchor_Private_File_Manager {
             : $this->can_user_manage_folder($user_id, $entity_id);
         if (!$allowed) $this->json_error('Forbidden', 403);
 
-        $valid_roles = array_keys((array) wp_roles()->roles);
-        $valid_roles = array_map('sanitize_key', $valid_roles);
+        $valid_roles = $this->get_valid_permission_role_keys();
 
         $normalized = [];
         foreach ($roles as $role) {
             $role = sanitize_key((string) $role);
             if (!$role) continue;
             if (!in_array($role, $valid_roles, true)) continue;
-            if ($role === 'administrator') continue;
             $normalized[] = $role;
         }
         $normalized = array_values(array_unique($normalized));
+
+        $normalized_users = [];
+        foreach ($users as $u) {
+            $uid = is_array($u) && isset($u['id']) ? (int) $u['id'] : (int) $u;
+            if ($uid <= 0) continue;
+            $wp_user = get_user_by('id', $uid);
+            $normalized_users[$uid] = [
+                'id' => (string) $uid,
+                'name' => $wp_user ? $wp_user->display_name : (is_array($u) && isset($u['name']) ? sanitize_text_field((string) $u['name']) : (string) $uid),
+            ];
+        }
+        $users = array_values($normalized_users);
 
         global $wpdb;
         $perms = self::table('permissions');
@@ -3393,8 +3608,15 @@ class Anchor_Private_File_Manager {
             ], ['%s','%d','%s','%s','%s','%d','%s']);
         }
 
-        $this->log_activity($user_id, 'set_permissions', $entity_type, $entity_id, ['roles' => $normalized, 'users' => $users]);
-        $this->json_success(['saved' => true, 'roles' => $normalized, 'users' => $users]);
+        $policy = $this->save_permission_policy($entity_type, $entity_id, 'view', $policy_input, $user_id);
+
+        $this->log_activity($user_id, 'set_permissions', $entity_type, $entity_id, ['roles' => $normalized, 'users' => $users, 'policy' => $policy]);
+        $this->json_success([
+            'saved' => true,
+            'roles' => $normalized,
+            'users' => $users,
+            'policy' => $this->enrich_permission_policy_for_response($policy),
+        ]);
     }
 
     public function ajax_user_search() {

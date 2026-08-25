@@ -1018,6 +1018,80 @@
   gap: 14px;
 }
 
+.afm__permSection {
+  display: grid;
+  gap: 10px;
+}
+
+.afm__permSectionHead,
+.afm__permRuleHead,
+.afm__permActions,
+.afm__dateRange {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.afm__permSectionHead {
+  justify-content: space-between;
+}
+
+.afm__permRules,
+.afm__permConditions {
+  display: grid;
+  gap: 10px;
+}
+
+.afm__permRule {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--afm-border);
+  border-radius: var(--afm-radius-sm);
+  background: #ffffff;
+  padding: 12px;
+}
+
+.afm__permRuleHead {
+  justify-content: space-between;
+}
+
+.afm__permRuleTitle {
+  font-weight: 900;
+}
+
+.afm__permCondition {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.afm__permCondition .afm__input,
+.afm__permCondition .afm__select {
+  width: 100%;
+  min-width: 0;
+}
+
+.afm__dateRange {
+  width: 100%;
+}
+
+.afm__dateRange .afm__input {
+  flex: 1 1 140px;
+}
+
+@media (max-width: 640px) {
+  .afm__permCondition {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .afm__permCondition > .afm__select:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
 .afm__fieldRow {
   display: grid;
   gap: 8px;

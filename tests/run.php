@@ -391,5 +391,87 @@ check('clamped segment marks only the real duration',
     Anchor_FM_Coverage::count_set(Anchor_FM_Coverage::mark_segments('',
         Anchor_FM_Media_Progress::clamp_segments([[0, 86400]], 120))), 120);
 
+// --- Anchor_FM_Permission_Policy ---
+require __DIR__ . '/../includes/class-afm-permission-policy.php';
+
+$policy = [
+    'operator' => 'any',
+    'rules' => [
+        [
+            'operator' => 'all',
+            'conditions' => [
+                ['type' => 'role', 'role' => 'member'],
+                ['type' => 'date', 'start' => '2026-08-01', 'end' => '2026-08-31'],
+            ],
+        ],
+        [
+            'operator' => 'all',
+            'conditions' => [
+                ['type' => 'role', 'role' => 'staff'],
+                ['type' => 'date', 'start' => '2026-09-01', 'end' => '2026-09-30'],
+            ],
+        ],
+    ],
+];
+check('permission policy role and date match',
+    Anchor_FM_Permission_Policy::evaluate($policy, ['userId' => 7, 'roles' => ['member']], '2026-08-15'), true);
+check('permission policy date blocks matching role',
+    Anchor_FM_Permission_Policy::evaluate($policy, ['userId' => 7, 'roles' => ['member']], '2026-09-15'), false);
+check('permission policy alternate role rule matches',
+    Anchor_FM_Permission_Policy::evaluate($policy, ['userId' => 7, 'roles' => ['staff']], '2026-09-15'), true);
+
+$all_policy = [
+    'operator' => 'all',
+    'rules' => [
+        ['operator' => 'all', 'conditions' => [['type' => 'role', 'role' => 'member']]],
+        ['operator' => 'all', 'conditions' => [['type' => 'user', 'userId' => '7']]],
+    ],
+];
+check('permission policy top-level all passes',
+    Anchor_FM_Permission_Policy::evaluate($all_policy, ['userId' => 7, 'roles' => ['member']], '2026-08-15'), true);
+check('permission policy top-level all fails one rule',
+    Anchor_FM_Permission_Policy::evaluate($all_policy, ['userId' => 8, 'roles' => ['member']], '2026-08-15'), false);
+
+$any_rule_policy = [
+    'operator' => 'any',
+    'rules' => [
+        [
+            'operator' => 'any',
+            'conditions' => [
+                ['type' => 'role', 'role' => 'member'],
+                ['type' => 'user', 'userId' => '9'],
+            ],
+        ],
+    ],
+];
+check('permission policy any condition passes on user',
+    Anchor_FM_Permission_Policy::evaluate($any_rule_policy, ['userId' => 9, 'roles' => []], '2026-08-15'), true);
+
+$normalized_policy = Anchor_FM_Permission_Policy::normalize([
+    'operator' => 'all',
+    'rules' => [
+        [
+            'operator' => 'all',
+            'conditions' => [
+                ['type' => 'role', 'role' => 'administrator'],
+                ['type' => 'role', 'role' => 'Customer+Role'],
+                ['type' => 'date', 'start' => '2026-10-31', 'end' => '2026-10-01'],
+            ],
+        ],
+    ],
+], ['customerrole']);
+check('permission policy normalize filters admin and swaps dates', $normalized_policy, [
+    'operator' => 'all',
+    'rules' => [
+        [
+            'operator' => 'all',
+            'conditions' => [
+                ['type' => 'role', 'role' => 'customerrole'],
+                ['type' => 'date', 'start' => '2026-10-01', 'end' => '2026-10-31'],
+            ],
+        ],
+    ],
+]);
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
