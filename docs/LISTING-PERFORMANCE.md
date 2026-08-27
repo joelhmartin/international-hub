@@ -19,7 +19,7 @@ lists a full folder. The folder size does not measurably change the time.
 
 ## Where the second goes
 
-```
+```text
 wp-load total  : 956 ms
 active plugins : 54
 object cache   : NONE - database only

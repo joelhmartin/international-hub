@@ -3399,7 +3399,7 @@ class Anchor_Private_File_Manager {
         // Download button that 404s -- which is how a whole-store outage read
         // to users as "the preview is just broken". Check once, here, and say so.
         $path = $this->get_file_path_on_disk($file);
-        $bytes_readable = file_exists($path) && is_readable($path);
+        $bytes_readable = @file_exists($path) && @is_readable($path);
         if (!$bytes_readable) {
             self::log_stream_refusal($file_id, 'preview: ' . $this->describe_unreadable_path($path));
         }
@@ -3545,17 +3545,27 @@ class Anchor_Private_File_Manager {
         ));
     }
 
-    /** Why the bytes for a row could not be served, for the log. */
+    /**
+     * Why the bytes for a row could not be served, for the log.
+     *
+     * Every probe here is silenced deliberately. The headline case this exists
+     * to describe is a store outside open_basedir, where each unsuppressed
+     * stat emits its own "open_basedir restriction in effect" warning -- four
+     * per call, once per document in a listing. That floods the log the log
+     * line is meant to clarify, and with display_errors on it prepends warning
+     * text to the JSON body, breaking the very response that would have told
+     * the user what happened. The return value below carries the same facts.
+     */
     private function describe_unreadable_path($path) {
         $base = self::storage_base();
         return sprintf(
             'bytes unreachable at "%s" (exists=%d readable=%d); store "%s" (is_dir=%d readable=%d); open_basedir="%s"',
             $path,
-            (int) file_exists($path),
-            (int) is_readable($path),
+            (int) @file_exists($path),
+            (int) @is_readable($path),
             $base,
-            (int) is_dir($base),
-            (int) is_readable($base),
+            (int) @is_dir($base),
+            (int) @is_readable($base),
             (string) ini_get('open_basedir')
         );
     }
@@ -3590,8 +3600,11 @@ class Anchor_Private_File_Manager {
             exit;
         }
 
+        // Silenced for the same reason as describe_unreadable_path(): a store
+        // outside open_basedir warns on every stat, and warning text in front
+        // of a file body corrupts the download. The refusal is logged below.
         $path = $this->get_file_path_on_disk($file);
-        if (!file_exists($path) || !is_readable($path)) {
+        if (!@file_exists($path) || !@is_readable($path)) {
             self::log_stream_refusal($file_id, $this->describe_unreadable_path($path));
             status_header(404);
             exit;
@@ -4265,7 +4278,7 @@ class Anchor_Private_File_Manager {
                 // customer on a browser error page, so resolve the file here
                 // and let the client render the difference.
                 $path = $this->get_file_path_on_disk($file);
-                $available = file_exists($path) && is_readable($path);
+                $available = @file_exists($path) && @is_readable($path);
                 if (!$available) {
                     self::log_stream_refusal((int) $file->id, 'product docs: ' . $this->describe_unreadable_path($path));
                 }

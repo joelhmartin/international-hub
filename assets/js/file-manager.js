@@ -60,6 +60,9 @@ jQuery(function ($) {
         // is where anything that could have changed the contents lands.
         childCache: {},
         childPending: {},
+        // Bumped by loadFolder(). A child fetch started before a navigation
+        // must not write its result into the state that navigation just reset.
+        childGeneration: 0,
         selectedRows: new Set(),
         clipboard: null,
     };
@@ -623,6 +626,7 @@ jQuery(function ($) {
         state.expandedRows = {};
         state.childCache = {};
         state.childPending = {};
+        state.childGeneration++;
         state.selectedRows.clear();
         if (typeof renderBulkBar === 'function') renderBulkBar();
         state.currentFolderId = Number(folderId);
@@ -2430,13 +2434,22 @@ jQuery(function ($) {
         if (state.childCache[fid]) return $.Deferred().resolve(state.childCache[fid]).promise();
         if (state.childPending[fid]) return state.childPending[fid];
 
+        // A hover can start a fetch that is still in flight when the user
+        // navigates away. Without this token its callback would delete a newer
+        // pending entry for the same id -- orphaning a live request -- and
+        // repopulate a cache the navigation had just cleared.
+        const gen = state.childGeneration;
+        const settle = () => { if (gen === state.childGeneration) delete state.childPending[fid]; };
+
         const req = api('anchor_fm_list', { folder_id: fid }).then(res => {
-            delete state.childPending[fid];
+            settle();
             if (!res || !res.success) return null;
-            state.childCache[fid] = currentRows(res.data);
-            return state.childCache[fid];
+            const rows = currentRows(res.data);
+            if (gen !== state.childGeneration) return null;
+            state.childCache[fid] = rows;
+            return rows;
         }, () => {
-            delete state.childPending[fid];
+            settle();
             return null;
         });
         state.childPending[fid] = req;
@@ -2474,9 +2487,10 @@ jQuery(function ($) {
         // Cold: the wait is a second of someone else's bootstrap, so say so
         // rather than leaving a dead arrow that looks like a missed click.
         const $btn = $(this).addClass('is-loading');
+        const gen = state.childGeneration;
         fetchChildren(fid).then(rows => {
             $btn.removeClass('is-loading');
-            if (!rows) return;
+            if (!rows || gen !== state.childGeneration) return;
             state.expandedRows[fid] = rows;
             renderList(state.currentList, state.currentCapability);
         });
