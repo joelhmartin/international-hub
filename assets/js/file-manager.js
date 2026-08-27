@@ -641,6 +641,7 @@ jQuery(function ($) {
             if (!res || !res.success) return;
             renderBreadcrumbs(res.data.breadcrumbs);
             state.lastBreadcrumbs = res.data.breadcrumbs;
+            seedChildCache(res.data.contents);
             renderList({ folders: res.data.folders, links: res.data.links, files: res.data.files, videos: res.data.videos }, res.data.capability);
             $root.trigger('anchorfm:folderLoaded', {
                 folderId: state.currentFolderId,
@@ -2430,6 +2431,17 @@ jQuery(function ($) {
     // Nothing here can make that request fast, so instead: never issue it twice
     // for the same folder, and start it on hover so it overlaps the time
     // between the pointer reaching the arrow and the click landing.
+    // The listing endpoints now return every folder this user may open, so the
+    // usual case is that expanding one needs no request. Seeded on every
+    // listing response, which is also what keeps it fresh -- the copy is never
+    // older than the navigation that fetched it.
+    function seedChildCache(contents) {
+        if (!contents || typeof contents !== 'object') return;
+        Object.keys(contents).forEach(fid => {
+            state.childCache[fid] = currentRows(contents[fid]);
+        });
+    }
+
     function fetchChildren(fid) {
         if (state.childCache[fid]) return $.Deferred().resolve(state.childCache[fid]).promise();
         if (state.childPending[fid]) return state.childPending[fid];

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.13.3
+ * Version: 2.14.0
  * Author: Anchor Corps
  */
 
@@ -15,10 +15,11 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-index.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.13.3';
+    const VERSION = '2.14.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -1225,6 +1226,10 @@ class Anchor_Private_File_Manager {
     private function get_permission_policy($entity_type, $entity_id, $capability = 'view') {
         $key = 'policy:' . $entity_type . ':' . (int) $entity_id . ':' . $capability;
         return $this->memoized($key, function () use ($entity_type, $entity_id, $capability) {
+            if ($this->perm_index) {
+                $raw = $this->perm_index->policy($entity_type, $entity_id, $capability);
+                return $this->normalize_permission_policy($raw ?: []);
+            }
             global $wpdb;
             $policies = self::table('permission_policies');
             $raw = $wpdb->get_var($wpdb->prepare(
@@ -1308,14 +1313,120 @@ class Anchor_Private_File_Manager {
     private $perm_memo = [];
     private $perm_memo_on = false;
 
+    /** @var Anchor_FM_Permission_Index|null Loaded for the life of a memo scope. */
+    private $perm_index = null;
+
     private function begin_perm_memo() {
         $this->perm_memo = [];
         $this->perm_memo_on = true;
+        $this->load_permission_index();
     }
 
     private function end_perm_memo() {
         $this->perm_memo = [];
         $this->perm_memo_on = false;
+        $this->perm_index = null;
+    }
+
+    /**
+     * Pull the whole permission model into memory in three queries.
+     *
+     * Safe to hold for the scope's lifetime for the same reason the memo is:
+     * it is loaded only around loops that read, so nothing can write a
+     * permission while it is live. It is dropped in end_perm_memo().
+     */
+    private function load_permission_index() {
+        global $wpdb;
+        $index = new Anchor_FM_Permission_Index();
+
+        // Every folder, is_private included: the ancestor walk climbs through
+        // folders the listing itself would never show.
+        $rows = $wpdb->get_results("SELECT id, parent_id, owner_user_id FROM " . self::table('folders'));
+        foreach ((array) $rows as $r) {
+            $index->add_folder((int) $r->id, (int) $r->parent_id, (int) $r->owner_user_id);
+        }
+
+        $rows = $wpdb->get_results(
+            "SELECT entity_type, entity_id, subject_type, subject_key, capability FROM " . self::table('permissions')
+        );
+        foreach ((array) $rows as $r) {
+            $index->add_permission($r->entity_type, (int) $r->entity_id, $r->subject_type, $r->subject_key, $r->capability);
+        }
+
+        // Queried directly, as the per-entity lookup it replaces was: if the
+        // table is missing, this returns null and the site behaves as it did
+        // before, with no policy rules rather than a fatal.
+        $policies = self::table('permission_policies');
+        $rows = $wpdb->get_results("SELECT entity_type, entity_id, capability, policy FROM {$policies}");
+        foreach ((array) $rows as $r) {
+            $index->add_policy($r->entity_type, (int) $r->entity_id, $r->capability, $r->policy);
+        }
+
+        // Which folder each entity inherits from. Two columns, not the whole
+        // row: this exists only to answer the inheritance step without a query
+        // per entity.
+        foreach (['file' => 'files', 'link' => 'links', 'video' => 'videos'] as $type => $table) {
+            $rows = $wpdb->get_results("SELECT id, folder_id FROM " . self::table($table));
+            if ($rows === null) continue;
+            foreach ((array) $rows as $r) {
+                $index->add_entity_folder($type, (int) $r->id, (int) $r->folder_id);
+            }
+            $index->mark_tracked($type);
+        }
+
+        $this->perm_index = $index;
+    }
+
+    /**
+     * Parent and owner of a folder, from the index when one is loaded.
+     *
+     * Falls back to the row query so the walk behaves identically outside a
+     * memo scope, and for a folder created after the index was built.
+     */
+    /**
+     * Folder an entity inherits from, or null when the entity does not exist.
+     *
+     * Only trusts the index for a type it holds in full; otherwise a type the
+     * index does not track would read as "no such file" and deny access.
+     */
+    private function entity_folder_id($entity_type, $entity_id) {
+        if ($this->perm_index && $this->perm_index->tracks($entity_type)) {
+            return $this->perm_index->entity_folder($entity_type, $entity_id);
+        }
+        switch ($entity_type) {
+            case 'file':  $row = $this->get_file_row($entity_id); break;
+            case 'link':  $row = $this->get_link_row($entity_id); break;
+            case 'video': $row = $this->get_video_row($entity_id); break;
+            default:      return null;
+        }
+        return $row ? (int) $row->folder_id : null;
+    }
+
+    /**
+     * The three fields the capability walk reads, without fetching a whole row.
+     */
+    private function folder_node($folder_id) {
+        $node = $this->folder_ancestry($folder_id);
+        if ($node === null) return null;
+        $obj = new stdClass();
+        $obj->id = (int) $folder_id;
+        $obj->parent_id = (int) $node['parent'];
+        $obj->owner_user_id = (int) $node['owner'];
+        return $obj;
+    }
+
+    private function folder_ancestry($folder_id) {
+        if ($this->perm_index) {
+            $node = $this->perm_index->folder($folder_id);
+            if ($node !== null) return $node;
+            // Index miss: a folder created since it was built. Fall through.
+        }
+        $row = $this->get_folder_row($folder_id);
+        if (!$row) return null;
+        return [
+            'parent' => (int) $row->parent_id,
+            'owner'  => (int) $row->owner_user_id,
+        ];
     }
 
     /** Resolve $key through the memo when one is open, else just call $compute. */
@@ -1399,15 +1510,15 @@ class Anchor_Private_File_Manager {
     }
 
     private function can_user_view_video($user_id, $video_id) {
-        $video = $this->get_video_row($video_id);
-        if (!$video) return false;
-        return $this->can_user_view_folder($user_id, (int) $video->folder_id);
+        $folder_id = $this->entity_folder_id('video', $video_id);
+        if ($folder_id === null) return false;
+        return $this->can_user_view_folder($user_id, $folder_id);
     }
 
     private function can_user_manage_video($user_id, $video_id) {
-        $video = $this->get_video_row($video_id);
-        if (!$video) return false;
-        return $this->can_user_manage_folder($user_id, (int) $video->folder_id);
+        $folder_id = $this->entity_folder_id('video', $video_id);
+        if ($folder_id === null) return false;
+        return $this->can_user_manage_folder($user_id, $folder_id);
     }
 
     private function get_effective_capability($user_id, $entity_type, $entity_id) {
@@ -1416,7 +1527,7 @@ class Anchor_Private_File_Manager {
         }
 
         if ($entity_type === 'folder') {
-            $folder = $this->get_folder_row($entity_id);
+            $folder = $this->folder_node($entity_id);
             if (!$folder) return 'none';
             if (!empty($folder->owner_user_id) && (int) $folder->owner_user_id === (int) $user_id) {
                 return 'manage';
@@ -1425,12 +1536,12 @@ class Anchor_Private_File_Manager {
         }
 
         if ($entity_type === 'file') {
-            $file = $this->get_file_row($entity_id);
-            if (!$file) return 'none';
+            $folder_id = $this->entity_folder_id('file', $entity_id);
+            if ($folder_id === null) return 'none';
             // File-level role permissions override folder inheritance when present.
             $cap = $this->compute_entity_capability_direct($user_id, 'file', $entity_id);
             if ($cap !== 'none') return $cap;
-            $folder = $this->get_folder_row((int) $file->folder_id);
+            $folder = $this->folder_node($folder_id);
             if (!$folder) return 'none';
             return $this->compute_folder_capability($user_id, $folder);
         }
@@ -1446,19 +1557,30 @@ class Anchor_Private_File_Manager {
         });
     }
 
+    /**
+     * Walk a folder to the root taking the best capability found on the way.
+     *
+     * Same algorithm as before, reading parent/owner from the index instead of
+     * a row query per level. Depth cap and cycle guard are unchanged: both
+     * still matter, because a parent_id loop in the data would otherwise spin
+     * here whether or not the rows came from memory.
+     */
     private function compute_folder_capability_uncached($user_id, $folder_row) {
         $seen = [];
         $best = 0;
-        $current = $folder_row;
         $depth = 0;
 
-        while ($current && $depth < 50) {
+        $fid    = (int) $folder_row->id;
+        $parent = (int) $folder_row->parent_id;
+        $owner  = (int) $folder_row->owner_user_id;
+        $have   = true;
+
+        while ($have && $depth < 50) {
             $depth++;
-            $fid = (int) $current->id;
             if (isset($seen[$fid])) break;
             $seen[$fid] = true;
 
-            if (!empty($current->owner_user_id) && (int) $current->owner_user_id === (int) $user_id) {
+            if ($owner && $owner === (int) $user_id) {
                 $best = max($best, 3);
                 break;
             }
@@ -1466,10 +1588,14 @@ class Anchor_Private_File_Manager {
             $direct = $this->compute_entity_capability_direct($user_id, 'folder', $fid);
             $best = max($best, $this->cap_rank($direct));
 
-            if (!empty($current->parent_id)) {
-                $current = $this->get_folder_row((int) $current->parent_id);
+            if ($parent) {
+                $next = $this->folder_ancestry($parent);
+                if ($next === null) break;
+                $fid    = $parent;
+                $parent = (int) $next['parent'];
+                $owner  = (int) $next['owner'];
             } else {
-                $current = null;
+                $have = false;
             }
         }
 
@@ -1484,22 +1610,14 @@ class Anchor_Private_File_Manager {
     }
 
     private function compute_entity_capability_direct_uncached($user_id, $entity_type, $entity_id) {
-        global $wpdb;
-        $perms = self::table('permissions');
-
         $roles = $this->user_roles_lower($user_id);
         $role_keys = $roles ? array_map('sanitize_key', $roles) : [];
         $user_key = (string) (int) $user_id;
         $best = 0;
 
-        // User-specific view permission
-        $user_rows = $wpdb->get_col($wpdb->prepare(
-            "SELECT capability FROM {$perms} WHERE entity_type = %s AND entity_id = %d AND subject_type = 'user' AND subject_key = %s",
-            $entity_type,
-            $entity_id,
-            $user_key
-        ));
-        foreach ((array) $user_rows as $cap) {
+        // User-specific permission. No capability filter here, deliberately:
+        // a user row granting 'manage' also grants view, and ranking sorts it out.
+        foreach ($this->direct_user_capabilities($entity_type, $entity_id, $user_key) as $cap) {
             $best = max($best, $this->cap_rank($cap));
         }
 
@@ -1509,17 +1627,42 @@ class Anchor_Private_File_Manager {
 
         // Role-specific
         if ($role_keys) {
-            $placeholders = implode(',', array_fill(0, count($role_keys), '%s'));
-            $query = "SELECT capability FROM {$perms} WHERE entity_type = %s AND entity_id = %d AND subject_type = 'role' AND capability = 'view' AND subject_key IN ({$placeholders})";
-            $args = array_merge([$query, $entity_type, $entity_id], $role_keys);
-            $sql = call_user_func_array([$wpdb, 'prepare'], $args);
-            $role_rows = $wpdb->get_col($sql);
-            foreach ((array) $role_rows as $cap) {
+            foreach ($this->direct_role_view_capabilities($entity_type, $entity_id, $role_keys) as $cap) {
                 $best = max($best, $this->cap_rank($cap));
             }
         }
 
         return $this->rank_to_cap($best);
+    }
+
+    /** Index when loaded, otherwise the query it stands in for. */
+    private function direct_user_capabilities($entity_type, $entity_id, $user_key) {
+        if ($this->perm_index) {
+            return $this->perm_index->user_capabilities($entity_type, $entity_id, $user_key);
+        }
+        global $wpdb;
+        $perms = self::table('permissions');
+        return (array) $wpdb->get_col($wpdb->prepare(
+            "SELECT capability FROM {$perms} WHERE entity_type = %s AND entity_id = %d AND subject_type = 'user' AND subject_key = %s",
+            $entity_type,
+            $entity_id,
+            $user_key
+        ));
+    }
+
+    /** Index when loaded, otherwise the query it stands in for. */
+    private function direct_role_view_capabilities($entity_type, $entity_id, array $role_keys) {
+        if (!$role_keys) return [];
+        if ($this->perm_index) {
+            return $this->perm_index->role_view_capabilities($entity_type, $entity_id, $role_keys);
+        }
+        global $wpdb;
+        $perms = self::table('permissions');
+        $placeholders = implode(',', array_fill(0, count($role_keys), '%s'));
+        $query = "SELECT capability FROM {$perms} WHERE entity_type = %s AND entity_id = %d AND subject_type = 'role' AND capability = 'view' AND subject_key IN ({$placeholders})";
+        $args = array_merge([$query, $entity_type, $entity_id], $role_keys);
+        $sql = call_user_func_array([$wpdb, 'prepare'], $args);
+        return (array) $wpdb->get_col($sql);
     }
 
     private function entity_has_view_permissions($entity_type, $entity_id) {
@@ -1835,15 +1978,15 @@ class Anchor_Private_File_Manager {
     }
 
     private function can_user_view_link($user_id, $link_id) {
-        $link = $this->get_link_row($link_id);
-        if (!$link) return false;
-        return $this->can_user_view_folder($user_id, (int) $link->folder_id);
+        $folder_id = $this->entity_folder_id('link', $link_id);
+        if ($folder_id === null) return false;
+        return $this->can_user_view_folder($user_id, $folder_id);
     }
 
     private function can_user_manage_link($user_id, $link_id) {
-        $link = $this->get_link_row($link_id);
-        if (!$link) return false;
-        return $this->can_user_manage_folder($user_id, (int) $link->folder_id);
+        $folder_id = $this->entity_folder_id('link', $link_id);
+        if ($folder_id === null) return false;
+        return $this->can_user_manage_folder($user_id, $folder_id);
     }
 
     private function notify_upload($file_row, $actor_user_id) {
@@ -1886,6 +2029,10 @@ class Anchor_Private_File_Manager {
         $tree = $this->build_folder_tree($user_id);
         $this->end_perm_memo();
 
+        // No contents map here on purpose: the client calls ajax_list for the
+        // default folder the moment this returns, and that response carries
+        // one. Building it in both would pay for the whole store twice on
+        // every page load.
         $this->json_success([
             'tree' => $tree,
             'defaultFolderId' => 0,
@@ -1964,6 +2111,182 @@ class Anchor_Private_File_Manager {
         return $build(0);
     }
 
+    /**
+     * Row shaping, shared by the single-folder listing and the bulk preload.
+     *
+     * Extracted so the two paths cannot drift: whatever the client is handed
+     * for the folder it opened is built by the same code as everything it is
+     * handed for the folders it might open next.
+     */
+    private function shape_folder_row($f) {
+        return [
+            'id' => (int) $f->id,
+            'name' => $f->name,
+            'isPrivate' => (int) $f->is_private === 1,
+            'ownerUserId' => !empty($f->owner_user_id) ? (int) $f->owner_user_id : 0,
+        ];
+    }
+
+    private function shape_file_row($r) {
+        return [
+            'id' => (int) $r->id,
+            'name' => $r->original_name,
+            'mime' => $r->mime_type,
+            'size' => (int) $r->size,
+            'uploadedBy' => !empty($r->uploader_user_id) ? (int) $r->uploader_user_id : 0,
+            'createdAt' => $r->created_at,
+        ];
+    }
+
+    private function shape_link_row($l) {
+        return [
+            'id' => (int) $l->id,
+            'title' => $l->title,
+            'url' => $l->url,
+            'createdBy' => !empty($l->created_by) ? (int) $l->created_by : 0,
+            'createdAt' => $l->created_at,
+        ];
+    }
+
+    private function shape_video_row($v) {
+        return [
+            'id' => (int) $v->id,
+            'title' => $v->title,
+            'vimeoId' => $v->vimeo_id,
+            'vimeoHash' => isset($v->vimeo_hash) ? (string) $v->vimeo_hash : '',
+            'thumbnailUrl' => isset($v->thumbnail_url) ? (string) $v->thumbnail_url : '',
+            'createdBy' => !empty($v->created_by) ? (int) $v->created_by : 0,
+            'createdAt' => $v->created_at,
+        ];
+    }
+
+    /** Attach watch percentages from a prebuilt map. Only media rows carry one. */
+    private function apply_watch_percents(array &$video_list, array &$file_list, array $watch) {
+        foreach ($video_list as $i => $v) {
+            $key = Anchor_FM_Media_Progress::SOURCE_VIMEO . ':' . (int) $v['id'];
+            if (isset($watch[$key])) { $video_list[$i]['watchPercent'] = $watch[$key]; }
+        }
+        foreach ($file_list as $i => $f) {
+            if (strpos((string) $f['mime'], 'video/') !== 0) continue;
+            $key = Anchor_FM_Media_Progress::SOURCE_FILE . ':' . (int) $f['id'];
+            if (isset($watch[$key])) { $file_list[$i]['watchPercent'] = $watch[$key]; }
+        }
+    }
+
+    /** Media ids in a listing that can carry a watch percentage. */
+    private function watch_ids_for(array $video_list, array $file_list, array &$video_ids, array &$file_ids) {
+        foreach ($video_list as $v) { $video_ids[] = (int) $v['id']; }
+        foreach ($file_list as $f) {
+            if (strpos((string) $f['mime'], 'video/') === 0) { $file_ids[] = (int) $f['id']; }
+        }
+    }
+
+    /**
+     * Ceiling on the preload, in rows across the whole store.
+     *
+     * The preload exists because a round trip here costs a full WordPress
+     * bootstrap -- about a second -- regardless of how little it returns, so
+     * one large response beats many small ones. That stops being true once the
+     * response is big enough to cost real transfer time, and a site with
+     * 100,000 files should go back to fetching a folder at a time. Filterable
+     * because the right number depends on the site, not on this plugin.
+     */
+    private function contents_preload_max() {
+        return (int) apply_filters('anchor_fm_contents_preload_max', 5000);
+    }
+
+    /**
+     * Every folder's contents in one pass, permission-filtered per user.
+     *
+     * Returns folderId => ['folders','links','files','videos'], or null when
+     * the store is too large to be worth preloading. Only folders the user may
+     * view get an entry, and every row inside one is checked with the same
+     * can_user_view_* calls the single-folder listing uses -- this is a
+     * different query plan, not a different permission model.
+     */
+    private function build_contents_map($user_id, $product_docs_id) {
+        global $wpdb;
+
+        $total = 0;
+        foreach (['folders', 'files', 'links', 'videos'] as $t) {
+            $total += (int) $wpdb->get_var("SELECT COUNT(1) FROM " . self::table($t));
+        }
+        if ($total > $this->contents_preload_max()) return null;
+
+        // Root is addressable but is not a row; it holds folders only.
+        $visible = [0 => true];
+        $map = [0 => ['folders' => [], 'links' => [], 'files' => [], 'videos' => []]];
+
+        $folder_rows = $wpdb->get_results(
+            "SELECT id, parent_id, name, owner_user_id, is_private FROM " . self::table('folders')
+            . " WHERE is_private = 0 ORDER BY name ASC"
+        );
+        $shaped_folders = [];
+        foreach ((array) $folder_rows as $f) {
+            $fid = (int) $f->id;
+            if ($fid === $product_docs_id) continue;
+            if (!$this->can_user_view_folder($user_id, $fid)) continue;
+            $visible[$fid] = true;
+            $map[$fid] = ['folders' => [], 'links' => [], 'files' => [], 'videos' => []];
+            $shaped_folders[] = [(int) $f->parent_id, $this->shape_folder_row($f)];
+        }
+
+        // Second pass: a child can appear before its parent in name order, so
+        // the parent's visibility is only known once every folder is checked.
+        foreach ($shaped_folders as $entry) {
+            list($parent_id, $shaped) = $entry;
+            if (isset($visible[$parent_id])) { $map[$parent_id]['folders'][] = $shaped; }
+        }
+
+        $rows = $wpdb->get_results(
+            "SELECT id, folder_id, original_name, mime_type, size, uploader_user_id, created_at FROM "
+            . self::table('files') . " ORDER BY created_at DESC"
+        );
+        foreach ((array) $rows as $r) {
+            $fid = (int) $r->folder_id;
+            if ($fid <= 0 || !isset($visible[$fid])) continue;
+            if (!$this->can_user_view_file($user_id, (int) $r->id)) continue;
+            $map[$fid]['files'][] = $this->shape_file_row($r);
+        }
+
+        $rows = $wpdb->get_results(
+            "SELECT id, folder_id, title, url, created_by, created_at FROM "
+            . self::table('links') . " ORDER BY created_at DESC"
+        );
+        foreach ((array) $rows as $l) {
+            $fid = (int) $l->folder_id;
+            if ($fid <= 0 || !isset($visible[$fid])) continue;
+            if (!$this->can_user_view_link($user_id, (int) $l->id)) continue;
+            $map[$fid]['links'][] = $this->shape_link_row($l);
+        }
+
+        $rows = $wpdb->get_results(
+            "SELECT id, folder_id, vimeo_id, vimeo_hash, title, thumbnail_url, created_by, created_at FROM "
+            . self::table('videos') . " ORDER BY created_at DESC"
+        );
+        foreach ((array) $rows as $v) {
+            $fid = (int) $v->folder_id;
+            if ($fid <= 0 || !isset($visible[$fid])) continue;
+            if (!$this->can_user_view_video($user_id, (int) $v->id)) continue;
+            $map[$fid]['videos'][] = $this->shape_video_row($v);
+        }
+
+        // One watch lookup for the whole store rather than one per folder.
+        $video_ids = [];
+        $file_ids = [];
+        foreach ($map as $lists) {
+            $this->watch_ids_for($lists['videos'], $lists['files'], $video_ids, $file_ids);
+        }
+        if ($video_ids || $file_ids) {
+            $watch = $this->watch_percent_map($video_ids, $file_ids);
+            foreach ($map as $fid => $lists) {
+                $this->apply_watch_percents($map[$fid]['videos'], $map[$fid]['files'], $watch);
+            }
+        }
+
+        return $map;
+    }
+
     public function ajax_list() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -1994,12 +2317,7 @@ class Anchor_Private_File_Manager {
         foreach ((array) $subfolders_raw as $f) {
             if ((int) $f->id === $product_docs_id) continue;
             if (!$this->can_user_view_folder($user_id, (int) $f->id)) continue;
-            $subfolders[] = [
-                'id' => (int) $f->id,
-                'name' => $f->name,
-                'isPrivate' => (int) $f->is_private === 1,
-                'ownerUserId' => !empty($f->owner_user_id) ? (int) $f->owner_user_id : 0,
-            ];
+            $subfolders[] = $this->shape_folder_row($f);
         }
 
         $file_rows = [];
@@ -2012,14 +2330,7 @@ class Anchor_Private_File_Manager {
         $file_list = [];
         foreach ((array) $file_rows as $r) {
             if (!$this->can_user_view_file($user_id, (int) $r->id)) continue;
-            $file_list[] = [
-                'id' => (int) $r->id,
-                'name' => $r->original_name,
-                'mime' => $r->mime_type,
-                'size' => (int) $r->size,
-                'uploadedBy' => !empty($r->uploader_user_id) ? (int) $r->uploader_user_id : 0,
-                'createdAt' => $r->created_at,
-            ];
+            $file_list[] = $this->shape_file_row($r);
         }
 
         $link_list = [];
@@ -2031,13 +2342,7 @@ class Anchor_Private_File_Manager {
             ));
             foreach ((array) $link_rows as $l) {
                 if (!$this->can_user_view_link($user_id, (int) $l->id)) continue;
-                $link_list[] = [
-                    'id' => (int) $l->id,
-                    'title' => $l->title,
-                    'url' => $l->url,
-                    'createdBy' => !empty($l->created_by) ? (int) $l->created_by : 0,
-                    'createdAt' => $l->created_at,
-                ];
+                $link_list[] = $this->shape_link_row($l);
             }
         }
 
@@ -2050,41 +2355,15 @@ class Anchor_Private_File_Manager {
             ));
             foreach ((array) $video_rows as $v) {
                 if (!$this->can_user_view_video($user_id, (int) $v->id)) continue;
-                $video_list[] = [
-                    'id' => (int) $v->id,
-                    'title' => $v->title,
-                    'vimeoId' => $v->vimeo_id,
-                    'vimeoHash' => isset($v->vimeo_hash) ? (string) $v->vimeo_hash : '',
-                    'thumbnailUrl' => isset($v->thumbnail_url) ? (string) $v->thumbnail_url : '',
-                    'createdBy' => !empty($v->created_by) ? (int) $v->created_by : 0,
-                    'createdAt' => $v->created_at,
-                ];
+                $video_list[] = $this->shape_video_row($v);
             }
         }
 
         $video_ids = [];
-        if (!empty($video_list)) {
-            foreach ($video_list as $v) { $video_ids[] = (int) $v['id']; }
-        }
-
         $file_ids = [];
-        foreach ($file_list as $f) {
-            if (strpos((string) $f['mime'], 'video/') === 0) { $file_ids[] = (int) $f['id']; }
-        }
-
+        $this->watch_ids_for($video_list, $file_list, $video_ids, $file_ids);
         $watch = $this->watch_percent_map($video_ids, $file_ids);
-
-        if (!empty($video_list)) {
-            foreach ($video_list as $i => $v) {
-                $key = Anchor_FM_Media_Progress::SOURCE_VIMEO . ':' . (int) $v['id'];
-                if (isset($watch[$key])) { $video_list[$i]['watchPercent'] = $watch[$key]; }
-            }
-        }
-        foreach ($file_list as $i => $f) {
-            if (strpos((string) $f['mime'], 'video/') !== 0) continue;
-            $key = Anchor_FM_Media_Progress::SOURCE_FILE . ':' . (int) $f['id'];
-            if (isset($watch[$key])) { $file_list[$i]['watchPercent'] = $watch[$key]; }
-        }
+        $this->apply_watch_percents($video_list, $file_list, $watch);
 
         $cap = $folder_id === 0 ? (user_can($user_id, 'administrator') ? 'manage' : 'view') : $this->get_effective_capability($user_id, 'folder', $folder_id);
         $this->json_success([
@@ -2096,6 +2375,10 @@ class Anchor_Private_File_Manager {
             'videos' => $video_list,
             'capability' => $cap,
             'isProductDocs' => $folder_id === $product_docs_id,
+            // Every other folder this user may open, so expanding one costs no
+            // request at all. Sent on every listing, which is what keeps it
+            // fresh: the client's copy is never older than its last navigation.
+            'contents' => $this->build_contents_map($user_id, $product_docs_id),
         ]);
     }
 
