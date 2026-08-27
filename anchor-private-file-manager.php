@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.13.2
+ * Version: 2.13.3
  * Author: Anchor Corps
  */
 
@@ -18,10 +18,19 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.p
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.13.2';
+    const VERSION = '2.13.3';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
+
+    /**
+     * Store directory names, relative to the uploads basedir.
+     *
+     * The leading dot is load-bearing, not cosmetic: it is what makes Nginx
+     * refuse to serve the tree. See storage_base().
+     */
+    const STORAGE_DIRNAME = '.anchor-private-files';
+    const LEGACY_STORAGE_DIRNAME = 'anchor-private-files';
     /**
      * Ceiling on one bulk video import. Each entry costs an outbound oEmbed
      * call, so an unbounded paste could stall the request past PHP's timeout.
@@ -383,6 +392,13 @@ class Anchor_Private_File_Manager {
         $base = self::storage_base();
         if (!file_exists($base)) {
             wp_mkdir_p($base);
+            // Nginx ignores the .htaccess below, so on those hosts the mode is
+            // the guard that holds: the web server runs as a different user
+            // than PHP-FPM, and 0700 leaves it unable to traverse the tree
+            // while PHP keeps full access. Applied only at creation -- an
+            // administrator who has deliberately widened an existing store
+            // should not have it silently changed back on the next upload.
+            @chmod($base, 0700);
         }
 
         $htaccess = $base . '/.htaccess';
@@ -1114,20 +1130,52 @@ class Anchor_Private_File_Manager {
     /**
      * Absolute filesystem path of the private file store.
      *
-     * SECURITY: this store MUST live outside the web root. The per-folder
+     * SECURITY: the store must not be reachable over HTTP. The per-folder
      * .htaccess files this plugin writes are inert on Nginx (which Kinsta
-     * runs), so a store under wp-content/uploads is served directly to
-     * anonymous visitors. Override with the ANCHOR_FM_STORAGE_DIR constant
-     * in wp-config.php, or the anchor_fm_storage_dir filter.
+     * runs), so the default relies on two guards that do work there:
+     *
+     *   - the leading dot in the directory name, which Nginx denies via its
+     *     standard "any URI containing /." rule, and
+     *   - mode 0700 set at creation, which the web-server user cannot
+     *     traverse because it runs as a different user than PHP-FPM.
+     *
+     * Moving the store outside the web root is NOT a safe alternative on
+     * every host: managed platforms confine PHP-FPM with open_basedir, and a
+     * store outside that list is invisible to PHP -- file_exists() returns
+     * false and every download 404s. See docs/PRIVATE-STORAGE.md.
+     *
+     * Override with the ANCHOR_FM_STORAGE_DIR constant in wp-config.php, or
+     * the anchor_fm_storage_dir filter.
      */
     public static function storage_base() {
         if (defined('ANCHOR_FM_STORAGE_DIR') && ANCHOR_FM_STORAGE_DIR) {
             $base = rtrim((string) ANCHOR_FM_STORAGE_DIR, '/\\');
         } else {
-            $upload_dir = wp_upload_dir();
-            $base = trailingslashit($upload_dir['basedir']) . 'anchor-private-files';
+            $base = self::default_storage_base();
         }
         return (string) apply_filters('anchor_fm_storage_dir', $base);
+    }
+
+    /**
+     * Where a site with no explicit configuration keeps its store.
+     *
+     * New installs get the dot-prefixed directory. An existing install that
+     * already has files in the pre-2.13.3 location keeps using it: changing
+     * the default must never relocate a live store out from under itself,
+     * because the plugin resolves paths at read time and every file would
+     * 404 the moment the plugin updated. Migrating is a deliberate act --
+     * move the tree, then chmod it -- and once the new directory exists this
+     * returns it.
+     */
+    private static function default_storage_base() {
+        $upload_dir = wp_upload_dir();
+        $safe   = trailingslashit($upload_dir['basedir']) . self::STORAGE_DIRNAME;
+        $legacy = trailingslashit($upload_dir['basedir']) . self::LEGACY_STORAGE_DIRNAME;
+
+        if (!is_dir($safe) && is_dir($legacy)) {
+            return $legacy;
+        }
+        return $safe;
     }
 
     private function get_file_path_on_disk($file_row) {
@@ -1175,15 +1223,18 @@ class Anchor_Private_File_Manager {
     }
 
     private function get_permission_policy($entity_type, $entity_id, $capability = 'view') {
-        global $wpdb;
-        $policies = self::table('permission_policies');
-        $raw = $wpdb->get_var($wpdb->prepare(
-            "SELECT policy FROM {$policies} WHERE entity_type = %s AND entity_id = %d AND capability = %s",
-            $entity_type,
-            $entity_id,
-            $capability
-        ));
-        return $this->normalize_permission_policy($raw ?: []);
+        $key = 'policy:' . $entity_type . ':' . (int) $entity_id . ':' . $capability;
+        return $this->memoized($key, function () use ($entity_type, $entity_id, $capability) {
+            global $wpdb;
+            $policies = self::table('permission_policies');
+            $raw = $wpdb->get_var($wpdb->prepare(
+                "SELECT policy FROM {$policies} WHERE entity_type = %s AND entity_id = %d AND capability = %s",
+                $entity_type,
+                $entity_id,
+                $capability
+            ));
+            return $this->normalize_permission_policy($raw ?: []);
+        });
     }
 
     private function permission_policy_matches($user_id, $entity_type, $entity_id, $capability = 'view') {
@@ -1240,10 +1291,50 @@ class Anchor_Private_File_Manager {
         return $policy;
     }
 
+    /**
+     * Memo for permission resolution, live only inside a read-only listing.
+     *
+     * Listing a folder resolves a capability for every row, and each
+     * resolution walks that row's ancestor chain running three queries per
+     * level. Every sibling walks the same chain, so the work is repeated once
+     * per row: a 31-file folder cost 497 queries for a non-admin before this,
+     * and 41 after.
+     *
+     * Deliberately NOT a request-scoped cache. It is opened and closed around
+     * loops that only read, so no write can happen while it is live and it
+     * cannot serve a capability that a mutation in the same request has
+     * already invalidated.
+     */
+    private $perm_memo = [];
+    private $perm_memo_on = false;
+
+    private function begin_perm_memo() {
+        $this->perm_memo = [];
+        $this->perm_memo_on = true;
+    }
+
+    private function end_perm_memo() {
+        $this->perm_memo = [];
+        $this->perm_memo_on = false;
+    }
+
+    /** Resolve $key through the memo when one is open, else just call $compute. */
+    private function memoized($key, callable $compute) {
+        if (!$this->perm_memo_on) {
+            return $compute();
+        }
+        if (!array_key_exists($key, $this->perm_memo)) {
+            $this->perm_memo[$key] = $compute();
+        }
+        return $this->perm_memo[$key];
+    }
+
     private function get_folder_row($folder_id) {
-        global $wpdb;
-        $folders = self::table('folders');
-        return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$folders} WHERE id = %d", $folder_id));
+        return $this->memoized('folder:' . (int) $folder_id, function () use ($folder_id) {
+            global $wpdb;
+            $folders = self::table('folders');
+            return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$folders} WHERE id = %d", $folder_id));
+        });
     }
 
     private function get_file_row($file_id) {
@@ -1348,6 +1439,14 @@ class Anchor_Private_File_Manager {
     }
 
     private function compute_folder_capability($user_id, $folder_row) {
+        if (!$folder_row) return 'none';
+        $key = 'foldercap:' . (int) $user_id . ':' . (int) $folder_row->id;
+        return $this->memoized($key, function () use ($user_id, $folder_row) {
+            return $this->compute_folder_capability_uncached($user_id, $folder_row);
+        });
+    }
+
+    private function compute_folder_capability_uncached($user_id, $folder_row) {
         $seen = [];
         $best = 0;
         $current = $folder_row;
@@ -1378,6 +1477,13 @@ class Anchor_Private_File_Manager {
     }
 
     private function compute_entity_capability_direct($user_id, $entity_type, $entity_id) {
+        $key = 'direct:' . (int) $user_id . ':' . $entity_type . ':' . (int) $entity_id;
+        return $this->memoized($key, function () use ($user_id, $entity_type, $entity_id) {
+            return $this->compute_entity_capability_direct_uncached($user_id, $entity_type, $entity_id);
+        });
+    }
+
+    private function compute_entity_capability_direct_uncached($user_id, $entity_type, $entity_id) {
         global $wpdb;
         $perms = self::table('permissions');
 
@@ -1768,11 +1874,17 @@ class Anchor_Private_File_Manager {
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
 
         $user_id = get_current_user_id();
-        $tree = $this->build_folder_tree($user_id);
         $product_docs_id = (int) get_option(self::OPT_PD_FOLDER_ID, 0);
         if ($product_docs_id === 0 && user_can($user_id, 'administrator')) {
             $product_docs_id = (int) self::ensure_product_docs_folder();
         }
+
+        // Every folder in the tree is permission-checked, and the checks share
+        // ancestor chains. Opened after the write above, so nothing mutates
+        // while it is live.
+        $this->begin_perm_memo();
+        $tree = $this->build_folder_tree($user_id);
+        $this->end_perm_memo();
 
         $this->json_success([
             'tree' => $tree,
@@ -1866,6 +1978,9 @@ class Anchor_Private_File_Manager {
         if ($folder_id > 0 && !$this->can_user_view_folder($user_id, $folder_id)) {
             $this->json_error('Forbidden', 403);
         }
+
+        // Read-only from here to the response; see begin_perm_memo().
+        $this->begin_perm_memo();
 
         global $wpdb;
         $folders = self::table('folders');
@@ -1993,6 +2108,9 @@ class Anchor_Private_File_Manager {
         if ($term === '' || mb_strlen($term) < 2) {
             $this->json_success(['results' => [], 'truncated' => false]);
         }
+
+        // Up to 200 hits per kind, each permission-checked; see begin_perm_memo().
+        $this->begin_perm_memo();
 
         global $wpdb;
         $like = '%' . $wpdb->esc_like($term) . '%';
@@ -3189,6 +3307,9 @@ class Anchor_Private_File_Manager {
         if ($folder_id <= 0) $this->json_error('Missing folder_id');
         if (!$this->can_user_view_folder($user_id, $folder_id)) $this->json_error('Forbidden', 403);
 
+        // Walks the whole subtree permission-checking every file; see begin_perm_memo().
+        $this->begin_perm_memo();
+
         global $wpdb;
         $folders_table = self::table('folders');
         $files_table = self::table('files');
@@ -3272,6 +3393,17 @@ class Anchor_Private_File_Manager {
         $file = $this->get_file_row($file_id);
         if (!$file) $this->json_error('Not found', 404);
 
+        // The row alone is not enough to promise a viewer. Every preview type
+        // below renders by pointing the browser at ajax_stream(), so if the
+        // bytes are unreachable the client paints a blank <iframe>/<img> and a
+        // Download button that 404s -- which is how a whole-store outage read
+        // to users as "the preview is just broken". Check once, here, and say so.
+        $path = $this->get_file_path_on_disk($file);
+        $bytes_readable = @file_exists($path) && @is_readable($path);
+        if (!$bytes_readable) {
+            self::log_stream_refusal($file_id, 'preview: ' . $this->describe_unreadable_path($path));
+        }
+
         $mime = (string) $file->mime_type;
         $type = 'none';
 
@@ -3304,13 +3436,10 @@ class Anchor_Private_File_Manager {
         ], admin_url('admin-ajax.php'));
 
         $text_excerpt = null;
-        if ($type === 'text') {
-            $path = $this->get_file_path_on_disk($file);
-            if (file_exists($path) && is_readable($path)) {
-                $raw = @file_get_contents($path, false, null, 0, 4000);
-                if (is_string($raw)) {
-                    $text_excerpt = wp_strip_all_tags($raw);
-                }
+        if ($type === 'text' && $bytes_readable) {
+            $raw = @file_get_contents($path, false, null, 0, 4000);
+            if (is_string($raw)) {
+                $text_excerpt = wp_strip_all_tags($raw);
             }
         }
 
@@ -3324,7 +3453,8 @@ class Anchor_Private_File_Manager {
                 'uploadedBy' => !empty($file->uploader_user_id) ? (int) $file->uploader_user_id : 0,
             ],
             'preview' => [
-                'type' => $type,
+                'type' => $bytes_readable ? $type : 'unavailable',
+                'available' => $bytes_readable,
                 'inlineUrl' => $inline_url,
                 'downloadUrl' => $download_url,
                 'textExcerpt' => $text_excerpt,
@@ -3395,6 +3525,51 @@ class Anchor_Private_File_Manager {
         }
     }
 
+    /**
+     * Why every refusal in ajax_stream() is logged.
+     *
+     * The endpoint answers a refusal with a bare status code and no body, so
+     * from the browser a store the server cannot read looks exactly like a
+     * deleted file, an expired nonce, and a permission denial. On 2026-08-21
+     * tmjtherapycentre.com moved its store to a path outside PHP-FPM's
+     * open_basedir; file_exists() then returned false for all 768 files, every
+     * download and preview on the site 404'd for six days, and not one line
+     * was written anywhere that said so. Naming the reason turns the next
+     * occurrence into a grep instead of a bisect.
+     */
+    private static function log_stream_refusal($file_id, $reason) {
+        error_log(sprintf(
+            'Anchor FM: refused to stream file %d — %s',
+            (int) $file_id,
+            $reason
+        ));
+    }
+
+    /**
+     * Why the bytes for a row could not be served, for the log.
+     *
+     * Every probe here is silenced deliberately. The headline case this exists
+     * to describe is a store outside open_basedir, where each unsuppressed
+     * stat emits its own "open_basedir restriction in effect" warning -- four
+     * per call, once per document in a listing. That floods the log the log
+     * line is meant to clarify, and with display_errors on it prepends warning
+     * text to the JSON body, breaking the very response that would have told
+     * the user what happened. The return value below carries the same facts.
+     */
+    private function describe_unreadable_path($path) {
+        $base = self::storage_base();
+        return sprintf(
+            'bytes unreachable at "%s" (exists=%d readable=%d); store "%s" (is_dir=%d readable=%d); open_basedir="%s"',
+            $path,
+            (int) @file_exists($path),
+            (int) @is_readable($path),
+            $base,
+            (int) @is_dir($base),
+            (int) @is_readable($base),
+            (string) ini_get('open_basedir')
+        );
+    }
+
     public function ajax_stream() {
         if (!is_user_logged_in()) {
             status_header(401);
@@ -3406,24 +3581,31 @@ class Anchor_Private_File_Manager {
         $disposition = isset($_GET['disposition']) ? (string) $_GET['disposition'] : 'attachment';
 
         if ($file_id <= 0 || !$nonce || !wp_verify_nonce($nonce, 'anchor_fm_stream_' . $file_id)) {
+            self::log_stream_refusal($file_id, 'bad or expired nonce');
             status_header(403);
             exit;
         }
 
         $user_id = get_current_user_id();
         if (!$this->can_user_view_file($user_id, $file_id)) {
+            self::log_stream_refusal($file_id, 'user ' . $user_id . ' lacks view capability');
             status_header(403);
             exit;
         }
 
         $file = $this->get_file_row($file_id);
         if (!$file) {
+            self::log_stream_refusal($file_id, 'no database row');
             status_header(404);
             exit;
         }
 
+        // Silenced for the same reason as describe_unreadable_path(): a store
+        // outside open_basedir warns on every stat, and warning text in front
+        // of a file body corrupts the download. The refusal is logged below.
         $path = $this->get_file_path_on_disk($file);
-        if (!file_exists($path) || !is_readable($path)) {
+        if (!@file_exists($path) || !@is_readable($path)) {
+            self::log_stream_refusal($file_id, $this->describe_unreadable_path($path));
             status_header(404);
             exit;
         }
@@ -4091,6 +4273,16 @@ class Anchor_Private_File_Manager {
                     'disposition' => 'attachment',
                     'nonce' => $nonce,
                 ], admin_url('admin-ajax.php'));
+                // A row is not a promise of bytes. Handing out a Download link
+                // the stream endpoint will answer with a bare 404 strands the
+                // customer on a browser error page, so resolve the file here
+                // and let the client render the difference.
+                $path = $this->get_file_path_on_disk($file);
+                $available = @file_exists($path) && @is_readable($path);
+                if (!$available) {
+                    self::log_stream_refusal((int) $file->id, 'product docs: ' . $this->describe_unreadable_path($path));
+                }
+
                 $docs_out[] = [
                     'fileId' => (int) $file->id,
                     'title' => $doc['title'] ?: $file->original_name,
@@ -4098,6 +4290,7 @@ class Anchor_Private_File_Manager {
                     'productId' => $pid,
                     'expires' => $doc['expires'],
                     'downloadUrl' => $download_url,
+                    'available' => $available,
                 ];
             }
         }
