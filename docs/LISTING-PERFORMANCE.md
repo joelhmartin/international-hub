@@ -158,6 +158,19 @@ compared against the shipped one across every entity on the live site:
   HTTP as a real logged-in non-admin across all 93 folders in their preload.
 - 17 unit tests on the index itself, including the MySQL `_ci PAD SPACE`
   matching it has to mirror.
+- **The client half is tested too**, which the server checks above say nothing
+  about: `tests/client-expand.js` runs the real `file-manager.js` under a
+  stubbed jQuery and asserts on requests issued — a preloaded folder expands
+  with **no** request, a cold one asks exactly once, re-expanding after collapse
+  asks zero times, a click during an in-flight prefetch joins it rather than
+  duplicating it, and a fetch that outlives a navigation does not seed the cache
+  that navigation cleared. Each assertion was mutation-checked by breaking the
+  guard it covers and confirming it fails; one early test proved vacuous that
+  way and was replaced.
+
+What none of this covers is rendering — that the expanded rows actually paint,
+that the disclosure arrow spins, that the drawer looks right. Those need a
+human or a real browser.
 
 ## What would actually make it fast
 

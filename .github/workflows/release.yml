@@ -29,6 +29,9 @@ jobs:
       - name: Run tests
         run: php tests/run.php
 
+      - name: Run client tests
+        run: node tests/client-expand.js
+
       - name: Build release ZIP
         run: |
           stage_parent="$(mktemp -d)"
