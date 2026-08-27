@@ -108,6 +108,23 @@ a single response.
    `anchor_fm_contents_preload_max` rows (default 5000) it is omitted and the
    client falls back to fetching per folder.
 
+   The same ceiling gates the index's per-entity data, which is the only part
+   of it that grows with how much a site stores. Above the limit those maps are
+   not built at all and the resolver falls back to a row query per entity —
+   otherwise the "fallback for large stores" would still have loaded an array
+   entry per file before deciding not to use it. The ceiling is tested with a
+   bounded `LIMIT`ed subquery rather than `COUNT(*)`, so the check does not
+   itself become the expensive operation on a large store. Folders, permission
+   rows and policies load unconditionally: they are the permission model, and
+   they scale with how a site is organised rather than with what it holds.
+
+   ```text
+   same data, ceiling forced to 10 (simulating a store past the limit)
+     normal   :  15 queries   93 ms   contents built
+     fallback : 772 queries  167 ms   contents omitted
+   902 decisions compared across the two paths, 0 mismatches
+   ```
+
 **Cost.** The listing response grows from ~5.6 KB to ~177 KB uncompressed, which
 the server sends `content-encoding: br` — about 35 KB on the wire by gzip
 measure, less under Brotli. The request itself stays at **~1.05 s**, unchanged:

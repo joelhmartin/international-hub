@@ -1316,6 +1316,36 @@ class Anchor_Private_File_Manager {
     /** @var Anchor_FM_Permission_Index|null Loaded for the life of a memo scope. */
     private $perm_index = null;
 
+    /** @var int|null Cached result of store_exceeds_preload_max() for this request. */
+    private $store_too_large = null;
+
+    /**
+     * Whether the store is too big to hold per-entity data in memory.
+     *
+     * Counted through a bounded subquery rather than COUNT(*) over the tables:
+     * the only thing this needs to know is whether the ceiling is crossed, and
+     * a full count would itself become the expensive operation on exactly the
+     * large stores it exists to protect.
+     */
+    private function store_exceeds_preload_max() {
+        if ($this->store_too_large !== null) return (bool) $this->store_too_large;
+
+        global $wpdb;
+        $cap = $this->contents_preload_max();
+        $limit = $cap + 1;
+        $total = 0;
+        foreach (['folders', 'files', 'links', 'videos'] as $t) {
+            $table = self::table($t);
+            $total += (int) $wpdb->get_var(
+                "SELECT COUNT(1) FROM (SELECT 1 FROM {$table} LIMIT {$limit}) c"
+            );
+            if ($total > $cap) break;
+        }
+
+        $this->store_too_large = $total > $cap ? 1 : 0;
+        return (bool) $this->store_too_large;
+    }
+
     private function begin_perm_memo() {
         $this->perm_memo = [];
         $this->perm_memo_on = true;
@@ -1365,13 +1395,25 @@ class Anchor_Private_File_Manager {
         // Which folder each entity inherits from. Two columns, not the whole
         // row: this exists only to answer the inheritance step without a query
         // per entity.
-        foreach (['file' => 'files', 'link' => 'links', 'video' => 'videos'] as $type => $table) {
-            $rows = $wpdb->get_results("SELECT id, folder_id FROM " . self::table($table));
-            if ($rows === null) continue;
-            foreach ((array) $rows as $r) {
-                $index->add_entity_folder($type, (int) $r->id, (int) $r->folder_id);
+        //
+        // This is the one part of the index that grows with how much content a
+        // site holds, so it is the one part with a ceiling. Above it, the maps
+        // are not built and entity_folder_id() falls back to a row query per
+        // entity -- the pre-2.14.0 behaviour, which is the right trade on a
+        // store where holding an entry per file would cost more than the
+        // queries it saves. Folders, permission rows and policies are loaded
+        // unconditionally: they are the permission model itself, they are
+        // bounded by how a site is organised rather than by how much it
+        // stores, and the ancestor walk needs them whatever the size.
+        if (!$this->store_exceeds_preload_max()) {
+            foreach (['file' => 'files', 'link' => 'links', 'video' => 'videos'] as $type => $table) {
+                $rows = $wpdb->get_results("SELECT id, folder_id FROM " . self::table($table));
+                if ($rows === null) continue;
+                foreach ((array) $rows as $r) {
+                    $index->add_entity_folder($type, (int) $r->id, (int) $r->folder_id);
+                }
+                $index->mark_tracked($type);
             }
-            $index->mark_tracked($type);
         }
 
         $this->perm_index = $index;
@@ -2207,11 +2249,7 @@ class Anchor_Private_File_Manager {
     private function build_contents_map($user_id, $product_docs_id) {
         global $wpdb;
 
-        $total = 0;
-        foreach (['folders', 'files', 'links', 'videos'] as $t) {
-            $total += (int) $wpdb->get_var("SELECT COUNT(1) FROM " . self::table($t));
-        }
-        if ($total > $this->contents_preload_max()) return null;
+        if ($this->store_exceeds_preload_max()) return null;
 
         // Root is addressable but is not a row; it holds folders only.
         $visible = [0 => true];
