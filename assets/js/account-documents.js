@@ -237,10 +237,15 @@ jQuery(function ($) {
                         <div class="afm__cardTitle">${esc(d.title)}</div>
                         <div class="afm__cardSub">${esc(d.product)}${d.expires ? ' • Expires ' + esc(d.expires) : ''}</div>
                     </div>
-                    <a class="afm__btn afm__btn--primary" href="${esc(d.downloadUrl)}">
+                    ${d.available === false
+                        ? `<span class="afm__btn afm__btn--disabled" aria-disabled="true" title="This file could not be read from the server.">
+                        <span class="dashicons dashicons-warning" aria-hidden="true"></span>
+                        Unavailable
+                    </span>`
+                        : `<a class="afm__btn afm__btn--primary" href="${esc(d.downloadUrl)}">
                         <span class="dashicons dashicons-download" aria-hidden="true"></span>
                         Download
-                    </a>
+                    </a>`}
                 </div>
             `).join(''));
         });

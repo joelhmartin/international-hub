@@ -495,6 +495,13 @@
   background: rgba(255, 77, 109, 0.15);
 }
 
+/* Stands in for Download when the server cannot read a file's bytes. */
+.afm__btn--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .afm__iconBtn {
   width: 36px;
   height: 36px;
@@ -876,6 +883,16 @@
   padding: 30px 18px;
   color: var(--afm-muted);
   text-align: center;
+}
+
+.afm__noPreview--error .dashicons {
+  color: #b32d2e;
+}
+
+.afm__noPreviewHint {
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.85;
 }
 
 .afm__meta {

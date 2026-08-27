@@ -724,6 +724,26 @@ jQuery(function ($) {
             });
     }
 
+    // Every preview surface renders by pointing the browser at the stream
+    // endpoint, which answers a failure with a bare status code and no body.
+    // An <img> or <iframe> fed that paints nothing at all, so without this the
+    // UI reports a server-side outage as an empty white rectangle.
+    function unavailableHtml() {
+        return `<div class="afm__noPreview afm__noPreview--error">
+            <span class="dashicons dashicons-warning" aria-hidden="true"></span>
+            <div>This file could not be read from the server.</div>
+            <div class="afm__noPreviewHint">The record exists but its contents are unavailable. Please contact the site administrator.</div>
+        </div>`;
+    }
+
+    // Second line of defence, for the case where the server believed the bytes
+    // were readable and the transfer failed anyway.
+    function bindPreviewErrorFallback($container) {
+        $container.find('[data-afm-onerror]').on('error', function () {
+            $(this).replaceWith(unavailableHtml());
+        });
+    }
+
     function loadFilePreview(fileId) {
         state.selectedFileId = Number(fileId);
         openDrawer();
@@ -742,8 +762,10 @@ jQuery(function ($) {
             $drawerTitle.text(file.name);
 
             let previewHtml = '';
-            if (prev.type === 'image') {
-                previewHtml = `<img class="afm__imgPreview" src="${esc(prev.inlineUrl)}" alt="${esc(file.name)}">`;
+            if (prev.type === 'unavailable') {
+                previewHtml = unavailableHtml();
+            } else if (prev.type === 'image') {
+                previewHtml = `<img class="afm__imgPreview" src="${esc(prev.inlineUrl)}" alt="${esc(file.name)}" data-afm-onerror>`;
             } else if (prev.type === 'pdf') {
                 previewHtml = `<iframe class="afm__pdfPreview" src="${esc(prev.inlineUrl)}" title="${esc(file.name)}"></iframe>`;
             } else if (prev.type === 'text') {
@@ -755,6 +777,7 @@ jQuery(function ($) {
                 </div>`;
             }
             $preview.html(previewHtml);
+            bindPreviewErrorFallback($preview);
 
             $meta.html(`
                 <div class="afm__metaRow"><div class="afm__metaKey">Type</div><div class="afm__metaVal">${esc(file.mime)}</div></div>
@@ -763,11 +786,13 @@ jQuery(function ($) {
             `);
 
             const canManage = capRank(cap) >= 3;
+            // See openFileViewer(): a Download for unreadable bytes is a 404.
+            const canDownload = prev.available !== false;
             $drawerActions.html(`
-                <a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}">
+                ${canDownload ? `<a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}">
                     <span class="dashicons dashicons-download" aria-hidden="true"></span>
                     ${esc(AnchorFM.i18n.download)}
-                </a>
+                </a>` : ''}
                 ${canManage ? `<button type="button" class="afm__btn afm__btn--secondary" data-afm-action="permissions-file" data-afm-file="${file.id}">
                     <span class="dashicons dashicons-lock" aria-hidden="true"></span>
                     ${esc(AnchorFM.i18n.permissions)}
@@ -797,8 +822,10 @@ jQuery(function ($) {
             }
             const d = res.data, file = d.file, prev = d.preview;
             let body = '<div class="afm__viewer">';
-            if (prev.type === 'image') {
-                body += `<div class="afm__viewerStage"><img class="afm__viewerImg" src="${esc(prev.inlineUrl)}" alt="${esc(file.name)}"></div>`;
+            if (prev.type === 'unavailable') {
+                body += `<div class="afm__viewerStage">${unavailableHtml()}</div>`;
+            } else if (prev.type === 'image') {
+                body += `<div class="afm__viewerStage"><img class="afm__viewerImg" src="${esc(prev.inlineUrl)}" alt="${esc(file.name)}" data-afm-onerror></div>`;
             } else if (prev.type === 'pdf') {
                 body += `<div class="afm__viewerStage"><iframe class="afm__viewerPdf" src="${esc(prev.inlineUrl)}"></iframe></div>`;
             } else if (prev.type === 'text') {
@@ -820,10 +847,13 @@ jQuery(function ($) {
                 metaRow('Size', fmtSize(file.size)) +
                 metaRow('Added', String(file.createdAt || '').slice(0, 10)) +
                 '</div></div>';
-            const footer = prev.downloadUrl
+            // Offering Download for bytes the server just said it cannot read
+            // sends the user to a bare 404 page. Withhold it instead.
+            const footer = (prev.downloadUrl && prev.available !== false)
                 ? `<a class="afm__btn afm__btn--primary" href="${esc(prev.downloadUrl)}"><span class="dashicons dashicons-download"></span> Download</a>`
                 : '';
             openViewerModal(esc(file.name), body, footer);
+            bindPreviewErrorFallback($(document));
             if (prev.type === 'video') {
                 mountFilePlayer(file.id, prev.downloadUrl);
                 if (AnchorFM.isAdmin) loadVideoHistory('file', file.id);
@@ -2487,7 +2517,8 @@ jQuery(function ($) {
                     setTimeout(() => triggerDownload(folderDownloadUrl(id)), i * 400);
                 } else if (kind === 'file') {
                     api('anchor_fm_preview', { file_id: id }).then(res => {
-                        if (res && res.success && res.data.preview && res.data.preview.downloadUrl) {
+                        if (res && res.success && res.data.preview && res.data.preview.downloadUrl
+                            && res.data.preview.available !== false) {
                             triggerDownload(res.data.preview.downloadUrl);
                         }
                     });
@@ -2520,9 +2551,15 @@ jQuery(function ($) {
 
     function openFileDownload(fileId) {
         api('anchor_fm_preview', { file_id: fileId }).then(res => {
-            if (res && res.success && res.data.preview && res.data.preview.downloadUrl) {
-                triggerDownload(res.data.preview.downloadUrl);
+            if (!res || !res.success || !res.data.preview || !res.data.preview.downloadUrl) return;
+            // Navigating to a stream URL the server cannot satisfy drops the
+            // user on a bare browser 404 page with no way back to the file
+            // manager. Say what happened and keep them where they are.
+            if (res.data.preview.available === false) {
+                toast('That file could not be read from the server.');
+                return;
             }
+            triggerDownload(res.data.preview.downloadUrl);
         });
     }
 

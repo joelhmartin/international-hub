@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.13.2
+ * Version: 2.13.3
  * Author: Anchor Corps
  */
 
@@ -18,7 +18,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.p
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.13.2';
+    const VERSION = '2.13.3';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -3272,6 +3272,17 @@ class Anchor_Private_File_Manager {
         $file = $this->get_file_row($file_id);
         if (!$file) $this->json_error('Not found', 404);
 
+        // The row alone is not enough to promise a viewer. Every preview type
+        // below renders by pointing the browser at ajax_stream(), so if the
+        // bytes are unreachable the client paints a blank <iframe>/<img> and a
+        // Download button that 404s -- which is how a whole-store outage read
+        // to users as "the preview is just broken". Check once, here, and say so.
+        $path = $this->get_file_path_on_disk($file);
+        $bytes_readable = file_exists($path) && is_readable($path);
+        if (!$bytes_readable) {
+            self::log_stream_refusal($file_id, 'preview: ' . $this->describe_unreadable_path($path));
+        }
+
         $mime = (string) $file->mime_type;
         $type = 'none';
 
@@ -3304,13 +3315,10 @@ class Anchor_Private_File_Manager {
         ], admin_url('admin-ajax.php'));
 
         $text_excerpt = null;
-        if ($type === 'text') {
-            $path = $this->get_file_path_on_disk($file);
-            if (file_exists($path) && is_readable($path)) {
-                $raw = @file_get_contents($path, false, null, 0, 4000);
-                if (is_string($raw)) {
-                    $text_excerpt = wp_strip_all_tags($raw);
-                }
+        if ($type === 'text' && $bytes_readable) {
+            $raw = @file_get_contents($path, false, null, 0, 4000);
+            if (is_string($raw)) {
+                $text_excerpt = wp_strip_all_tags($raw);
             }
         }
 
@@ -3324,7 +3332,8 @@ class Anchor_Private_File_Manager {
                 'uploadedBy' => !empty($file->uploader_user_id) ? (int) $file->uploader_user_id : 0,
             ],
             'preview' => [
-                'type' => $type,
+                'type' => $bytes_readable ? $type : 'unavailable',
+                'available' => $bytes_readable,
                 'inlineUrl' => $inline_url,
                 'downloadUrl' => $download_url,
                 'textExcerpt' => $text_excerpt,
@@ -3395,6 +3404,41 @@ class Anchor_Private_File_Manager {
         }
     }
 
+    /**
+     * Why every refusal in ajax_stream() is logged.
+     *
+     * The endpoint answers a refusal with a bare status code and no body, so
+     * from the browser a store the server cannot read looks exactly like a
+     * deleted file, an expired nonce, and a permission denial. On 2026-08-21
+     * tmjtherapycentre.com moved its store to a path outside PHP-FPM's
+     * open_basedir; file_exists() then returned false for all 768 files, every
+     * download and preview on the site 404'd for six days, and not one line
+     * was written anywhere that said so. Naming the reason turns the next
+     * occurrence into a grep instead of a bisect.
+     */
+    private static function log_stream_refusal($file_id, $reason) {
+        error_log(sprintf(
+            'Anchor FM: refused to stream file %d — %s',
+            (int) $file_id,
+            $reason
+        ));
+    }
+
+    /** Why the bytes for a row could not be served, for the log. */
+    private function describe_unreadable_path($path) {
+        $base = self::storage_base();
+        return sprintf(
+            'bytes unreachable at "%s" (exists=%d readable=%d); store "%s" (is_dir=%d readable=%d); open_basedir="%s"',
+            $path,
+            (int) file_exists($path),
+            (int) is_readable($path),
+            $base,
+            (int) is_dir($base),
+            (int) is_readable($base),
+            (string) ini_get('open_basedir')
+        );
+    }
+
     public function ajax_stream() {
         if (!is_user_logged_in()) {
             status_header(401);
@@ -3406,24 +3450,28 @@ class Anchor_Private_File_Manager {
         $disposition = isset($_GET['disposition']) ? (string) $_GET['disposition'] : 'attachment';
 
         if ($file_id <= 0 || !$nonce || !wp_verify_nonce($nonce, 'anchor_fm_stream_' . $file_id)) {
+            self::log_stream_refusal($file_id, 'bad or expired nonce');
             status_header(403);
             exit;
         }
 
         $user_id = get_current_user_id();
         if (!$this->can_user_view_file($user_id, $file_id)) {
+            self::log_stream_refusal($file_id, 'user ' . $user_id . ' lacks view capability');
             status_header(403);
             exit;
         }
 
         $file = $this->get_file_row($file_id);
         if (!$file) {
+            self::log_stream_refusal($file_id, 'no database row');
             status_header(404);
             exit;
         }
 
         $path = $this->get_file_path_on_disk($file);
         if (!file_exists($path) || !is_readable($path)) {
+            self::log_stream_refusal($file_id, $this->describe_unreadable_path($path));
             status_header(404);
             exit;
         }
@@ -4091,6 +4139,16 @@ class Anchor_Private_File_Manager {
                     'disposition' => 'attachment',
                     'nonce' => $nonce,
                 ], admin_url('admin-ajax.php'));
+                // A row is not a promise of bytes. Handing out a Download link
+                // the stream endpoint will answer with a bare 404 strands the
+                // customer on a browser error page, so resolve the file here
+                // and let the client render the difference.
+                $path = $this->get_file_path_on_disk($file);
+                $available = file_exists($path) && is_readable($path);
+                if (!$available) {
+                    self::log_stream_refusal((int) $file->id, 'product docs: ' . $this->describe_unreadable_path($path));
+                }
+
                 $docs_out[] = [
                     'fileId' => (int) $file->id,
                     'title' => $doc['title'] ?: $file->original_name,
@@ -4098,6 +4156,7 @@ class Anchor_Private_File_Manager {
                     'productId' => $pid,
                     'expires' => $doc['expires'],
                     'downloadUrl' => $download_url,
+                    'available' => $available,
                 ];
             }
         }
