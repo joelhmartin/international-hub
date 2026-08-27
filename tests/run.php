@@ -473,5 +473,59 @@ check('permission policy normalize filters admin and swaps dates', $normalized_p
     ],
 ]);
 
+// --- Anchor_FM_Permission_Index ---
+require __DIR__ . '/../includes/class-afm-permission-index.php';
+
+$idx = new Anchor_FM_Permission_Index();
+$idx->add_folder(1, 0, 0);
+$idx->add_folder(2, 1, 0);
+$idx->add_folder(3, 2, 77);
+$idx->add_permission('folder', 2, 'role', 'centre', 'view');
+$idx->add_permission('folder', 2, 'role', 'centre', 'manage');   // not view: must not surface
+$idx->add_permission('folder', 2, 'user', '42', 'manage');
+$idx->add_permission('file',  9, 'group', 'anything', 'view');   // unknown subject type
+$idx->add_policy('folder', 2, 'view', '{"operator":"all"}');
+
+check('index: folder ancestry', $idx->folder(3), ['parent' => 2, 'owner' => 77]);
+check('index: unknown folder is null', $idx->folder(999), null);
+check('index: root parent is 0', $idx->folder(1), ['parent' => 0, 'owner' => 0]);
+
+check('index: user capabilities are unfiltered by capability',
+    $idx->user_capabilities('folder', 2, '42'), ['manage']);
+check('index: user miss returns empty', $idx->user_capabilities('folder', 2, '43'), []);
+
+// The query being mirrored filters capability = 'view'; a role row granting
+// 'manage' was never returned by it, and must not start being returned now.
+check('index: role lookup keeps the view-only filter',
+    $idx->role_view_capabilities('folder', 2, ['centre']), ['view']);
+check('index: role miss returns empty',
+    $idx->role_view_capabilities('folder', 2, ['subscriber']), []);
+check('index: no roles returns empty',
+    $idx->role_view_capabilities('folder', 2, []), []);
+check('index: unrelated entity returns empty',
+    $idx->role_view_capabilities('folder', 7, ['centre']), []);
+
+// MySQL compared these keys under a _ci PAD SPACE collation. Matching that is
+// the contract: stricter would revoke access the site currently grants.
+check('index: role match is case-insensitive',
+    $idx->role_view_capabilities('folder', 2, ['CENTRE']), ['view']);
+check('index: role match ignores trailing spaces',
+    $idx->role_view_capabilities('folder', 2, ['centre  ']), ['view']);
+check('index: leading space is NOT ignored',
+    $idx->role_view_capabilities('folder', 2, [' centre']), []);
+
+check('index: unknown subject types are dropped',
+    $idx->user_capabilities('file', 9, 'anything'), []);
+check('index: policy round-trips', $idx->policy('folder', 2, 'view'), '{"operator":"all"}');
+check('index: policy miss is null', $idx->policy('folder', 2, 'manage'), null);
+check('index: policy miss on other entity is null', $idx->policy('file', 2, 'view'), null);
+
+// entity_type is part of the key: a file and a folder sharing an id must not
+// bleed into each other, which is the same collision the delete path guards.
+$idx2 = new Anchor_FM_Permission_Index();
+$idx2->add_permission('folder', 5, 'role', 'centre', 'view');
+check('index: file and folder ids do not collide',
+    $idx2->role_view_capabilities('file', 5, ['centre']), []);
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
