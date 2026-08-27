@@ -1369,9 +1369,19 @@ class Anchor_Private_File_Manager {
         global $wpdb;
         $index = new Anchor_FM_Permission_Index();
 
+        // get_results() returns an empty array for "no rows" and for "the query
+        // failed" alike, so every load below has to ask $wpdb->last_error which
+        // it was. An index built from a failed query is not empty-but-correct,
+        // it is confidently wrong: it would answer "no permissions exist" and
+        // deny every non-admin on the site. On failure the index is abandoned
+        // and the per-entity queries run instead, which is slower and right.
+        // ($wpdb::query() flushes last_error at the start of each query, so it
+        // always describes the call immediately above it.)
+
         // Every folder, is_private included: the ancestor walk climbs through
         // folders the listing itself would never show.
         $rows = $wpdb->get_results("SELECT id, parent_id, owner_user_id FROM " . self::table('folders'));
+        if ($wpdb->last_error) { $this->perm_index = null; return; }
         foreach ((array) $rows as $r) {
             $index->add_folder((int) $r->id, (int) $r->parent_id, (int) $r->owner_user_id);
         }
@@ -1379,13 +1389,15 @@ class Anchor_Private_File_Manager {
         $rows = $wpdb->get_results(
             "SELECT entity_type, entity_id, subject_type, subject_key, capability FROM " . self::table('permissions')
         );
+        if ($wpdb->last_error) { $this->perm_index = null; return; }
         foreach ((array) $rows as $r) {
             $index->add_permission($r->entity_type, (int) $r->entity_id, $r->subject_type, $r->subject_key, $r->capability);
         }
 
-        // Queried directly, as the per-entity lookup it replaces was: if the
-        // table is missing, this returns null and the site behaves as it did
-        // before, with no policy rules rather than a fatal.
+        // Deliberately tolerant, unlike the two above: the per-entity lookup
+        // this replaces also failed silently on a missing policies table and
+        // resolved to "no policy", so treating an error as no rules here is
+        // the existing behaviour rather than a new denial.
         $policies = self::table('permission_policies');
         $rows = $wpdb->get_results("SELECT entity_type, entity_id, capability, policy FROM {$policies}");
         foreach ((array) $rows as $r) {
@@ -1408,7 +1420,10 @@ class Anchor_Private_File_Manager {
         if (!$this->store_exceeds_preload_max()) {
             foreach (['file' => 'files', 'link' => 'links', 'video' => 'videos'] as $type => $table) {
                 $rows = $wpdb->get_results("SELECT id, folder_id FROM " . self::table($table));
-                if ($rows === null) continue;
+                // Left untracked on failure, so entity_folder_id() falls back
+                // to a row query. Marking it tracked would make every entity of
+                // this type read as "does not exist" and hide the lot.
+                if ($wpdb->last_error) { continue; }
                 foreach ((array) $rows as $r) {
                     $index->add_entity_folder($type, (int) $r->id, (int) $r->folder_id);
                 }

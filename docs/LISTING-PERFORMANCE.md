@@ -131,6 +131,16 @@ measure, less under Brotli. The request itself stays at **~1.05 s**, unchanged:
 the extra work disappears into the bootstrap it already shares a request with.
 One compressed response replaces an unbounded number of 1 s round trips.
 
+**Failing safely.** `wpdb::get_results()` returns an empty array both for "no
+rows" and for "the query failed", so every load in the index checks
+`$wpdb->last_error` to tell them apart. An index built from a failed query is
+not empty-but-correct, it is confidently wrong — it would answer "no
+permissions exist" and deny every non-admin on the site. On failure the index
+is abandoned, or the affected entity type is left untracked, and the
+per-entity queries run instead: slower, and right. Verified by pointing the
+bulk video query at a table that does not exist — the user still sees all 115
+videos through the row-query fallback, rather than none.
+
 **How it was checked.** Permission code is where a "faster" rewrite quietly
 starts showing people other people's files, so the batched resolver was
 compared against the shipped one across every entity on the live site:
