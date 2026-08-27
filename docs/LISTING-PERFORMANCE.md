@@ -65,15 +65,38 @@ no reason to.
 
 ## What would actually make it fast
 
-The plugin cannot fix a cost it does not incur. In order of leverage:
+Measured, after an initial wrong guess. The first version of this document
+named Redis object caching as the top lever. That was wrong, and the number
+that disproves it is worth keeping:
 
-1. **Enable Redis object caching** (MyKinsta → Tools, plus a drop-in). The site
-   currently has no persistent object cache, so 816 autoloaded options and 193
-   bootstrap queries are re-read from MySQL on every request. This speeds up
-   every logged-in page on the site, not just this plugin.
-2. **Audit the 54 active plugins.** Several are heavy and load on every request
-   including AJAX. Profiling which ones cost the most on `admin-ajax.php` is the
-   next step; Kinsta APM or Query Monitor will name them.
-3. Reducing the autoloaded options payload (349 KB) is a smaller, easy win.
+```text
+bootstrap total    : 1021.9 ms
+  of which SQL     :   27.6 ms  (191 queries)
+  PHP parse/execute:  994.3 ms
+opcache            : enabled
+object cache       : none
+```
 
-None of these are plugin changes, and all of them help the whole site.
+**SQL is 2.7% of the bootstrap.** A perfect object cache — eliminating every
+one of the 191 queries, which no cache does — would save under 28 ms of a
+1022 ms request. Redis is not the lever here. Neither is trimming the 349 KB of
+autoloaded options, which is part of that same 27.6 ms.
+
+The 994 ms is PHP executing 54 plugins' bootstrap code on every request, with
+opcache already enabled so it is not parse cost. That is the only thing worth
+attacking:
+
+1. **Find out which plugins cost the most on `admin-ajax.php`.** 54 are active,
+   several of them heavy suites (WooCommerce + Subscriptions, LearnDash,
+   Wordfence, WP Security Audit Log, Divi, FunnelKit). Kinsta APM, or a
+   `microtime()` probe around each plugin include, will name them in an hour.
+2. **Stop loading what AJAX does not need.** Many plugins hook `init` and load
+   their full stack on every `admin-ajax.php` call, including ones that have
+   nothing to do with them. Some can be short-circuited for our own actions.
+3. **Deactivate what is not used.** `wp-file-manager` in particular overlaps
+   this plugin's job, and there are three FunnelKit/marketing-automation pairs
+   plus two Divi module packs.
+
+Only (1) is worth doing first: it converts a guess into a list. Everything
+above is site-level, not plugin-level — this plugin's own share of a folder
+listing is single-digit milliseconds.
