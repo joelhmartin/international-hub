@@ -157,14 +157,34 @@ Hardened afterwards, so a recurrence is one `grep` away rather than a bisect:
   be read from the server" and withholds the Download button instead of
   rendering an empty viewer.
 
-## Known gap
+## The default (2.13.3 and later)
 
-`storage_base()` still **defaults** to `wp-content/uploads/anchor-private-files`
-with whatever permissions the filesystem gives it. A fresh install on an Nginx
-host with no constant defined is insecure by default. The `.htaccess` and
-`index.php` the plugin writes stop directory listing on Apache and stop nothing
-on Nginx.
+`storage_base()` now defaults to `wp-content/uploads/.anchor-private-files`,
+created at mode `0700`. A fresh install is therefore safe on Nginx and Apache
+with no constant, no `wp-config.php` edit and no web-server configuration — the
+same two guards described above, applied automatically.
 
-Making the default safe — a dot-prefixed directory at `0700`, which needs no
-constant and no web-server config — is not done yet, and is the obvious fix now
-that the arrangement is known to work.
+Setting `ANCHOR_FM_STORAGE_DIR` is still supported and still wins. It is only
+needed for a site that wants the store somewhere else entirely, and any such
+path must satisfy **both** constraints at the top of this document.
+
+**Existing installs are not moved.** If the pre-2.13.3 directory
+(`wp-content/uploads/anchor-private-files`) exists and the new one does not, the
+plugin keeps reading the old path. Relocating a live store on plugin update
+would 404 every file on the site the moment it ran — see the incident above for
+what that looks like. Migrating is deliberate:
+
+```bash
+cd wp-content/uploads
+mv anchor-private-files .anchor-private-files
+chmod 700 .anchor-private-files
+```
+
+Once the dot-prefixed directory exists, the plugin uses it. Verify with the two
+checks in the section above — both of them, over HTTP.
+
+Note that the mode is applied **only at creation**. The plugin will not chmod a
+directory an administrator has deliberately widened, and it will not fight
+Kinsta's "reset file permissions" tool. On a host where the web server and PHP
+run as the same user the mode guard cannot work at all; there the dot-prefix
+deny is the one that holds, which is why both exist.

@@ -55,6 +55,11 @@ jQuery(function ($) {
         sortKey: 'name',
         sortDir: 'asc',
         expandedRows: {},
+        // Children keyed by folder id, kept across collapse so re-expanding is
+        // free. Dropped wholesale by loadFolder()/reloadCurrentFolder(), which
+        // is where anything that could have changed the contents lands.
+        childCache: {},
+        childPending: {},
         selectedRows: new Set(),
         clipboard: null,
     };
@@ -616,6 +621,8 @@ jQuery(function ($) {
         state.searchFolderById = {};
         state.searchRowsByKey = {};
         state.expandedRows = {};
+        state.childCache = {};
+        state.childPending = {};
         state.selectedRows.clear();
         if (typeof renderBulkBar === 'function') renderBulkBar();
         state.currentFolderId = Number(folderId);
@@ -2413,6 +2420,39 @@ jQuery(function ($) {
         loadFolder(Number($(this).data('afm-crumb')));
     });
 
+    // Expanding a folder costs a full admin-ajax round trip, and almost all of
+    // that is WordPress booting -- roughly a second on a site with a large
+    // plugin set, against single-digit milliseconds of actual listing work.
+    // Nothing here can make that request fast, so instead: never issue it twice
+    // for the same folder, and start it on hover so it overlaps the time
+    // between the pointer reaching the arrow and the click landing.
+    function fetchChildren(fid) {
+        if (state.childCache[fid]) return $.Deferred().resolve(state.childCache[fid]).promise();
+        if (state.childPending[fid]) return state.childPending[fid];
+
+        const req = api('anchor_fm_list', { folder_id: fid }).then(res => {
+            delete state.childPending[fid];
+            if (!res || !res.success) return null;
+            state.childCache[fid] = currentRows(res.data);
+            return state.childCache[fid];
+        }, () => {
+            delete state.childPending[fid];
+            return null;
+        });
+        state.childPending[fid] = req;
+        return req;
+    }
+
+    function prefetchChildren(fid) {
+        if (state.search && state.search.length >= 2) return;
+        if (state.childCache[fid] || state.childPending[fid]) return;
+        fetchChildren(fid);
+    }
+
+    $root.on('mouseenter focus', '[data-afm-row-expand]', function () {
+        prefetchChildren(Number($(this).data('afm-row-expand')));
+    });
+
     $root.on('click', '[data-afm-row-expand]', function (e) {
         e.stopPropagation();
         // Expand-in-place operates on the browse listing only; in global-search
@@ -2425,9 +2465,19 @@ jQuery(function ($) {
             renderList(state.currentList, state.currentCapability);
             return;
         }
-        api('anchor_fm_list', { folder_id: fid }).then(res => {
-            if (!res || !res.success) return;
-            state.expandedRows[fid] = currentRows(res.data);
+        // Warm cache: expand in the same tick, with no request and no flicker.
+        if (state.childCache[fid]) {
+            state.expandedRows[fid] = state.childCache[fid];
+            renderList(state.currentList, state.currentCapability);
+            return;
+        }
+        // Cold: the wait is a second of someone else's bootstrap, so say so
+        // rather than leaving a dead arrow that looks like a missed click.
+        const $btn = $(this).addClass('is-loading');
+        fetchChildren(fid).then(rows => {
+            $btn.removeClass('is-loading');
+            if (!rows) return;
+            state.expandedRows[fid] = rows;
             renderList(state.currentList, state.currentCapability);
         });
     });
