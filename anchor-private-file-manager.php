@@ -92,6 +92,13 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_set_permissions', [$this, 'ajax_set_permissions']);
         add_action('wp_ajax_anchor_fm_user_search', [$this, 'ajax_user_search']);
         add_action('wp_ajax_anchor_fm_bulk_import_users', [$this, 'ajax_bulk_import_users']);
+        add_action('wp_ajax_anchor_fm_users_list', [$this, 'ajax_users_list']);
+        add_action('wp_ajax_anchor_fm_user_create', [$this, 'ajax_user_create']);
+        add_action('wp_ajax_anchor_fm_user_set_role', [$this, 'ajax_user_set_role']);
+        add_action('wp_ajax_anchor_fm_user_set_password', [$this, 'ajax_user_set_password']);
+        add_action('wp_ajax_anchor_fm_user_send_reset', [$this, 'ajax_user_send_reset']);
+        add_action('wp_ajax_anchor_fm_user_delete', [$this, 'ajax_user_delete']);
+        add_action('deleted_user', [$this, 'on_deleted_user']);
 
         add_action('wp_ajax_anchor_ap_orders', [$this, 'ajax_ap_orders']);
         add_action('wp_ajax_anchor_ap_order', [$this, 'ajax_ap_order']);
@@ -4285,6 +4292,174 @@ class Anchor_Private_File_Manager {
             'errors'  => $errors,
             'rows'    => $report,
         ]);
+    }
+
+    private function require_admin_ajax() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
+    }
+
+    private function assignable_role_keys() {
+        return array_column($this->get_editable_roles_for_permissions(), 'key');
+    }
+
+    private function user_is_manageable(WP_User $u) {
+        return Anchor_FM_User_Admin::is_manageable((array) $u->roles, (int) $u->ID, get_current_user_id())
+            && !user_can($u, 'administrator');
+    }
+
+    /** The posted user_id as a WP_User the current admin may act on, or a 403/404. */
+    private function manageable_target() {
+        $id = isset($_POST['user_id']) ? (int) $_POST['user_id'] : 0;
+        $u = $id > 0 ? get_user_by('id', $id) : false;
+        if (!$u) $this->json_error('User not found', 404);
+        if (!$this->user_is_manageable($u)) $this->json_error('This account cannot be changed here.', 403);
+        return $u;
+    }
+
+    /** user_id => latest last_viewed_at, in one query for a page of users. */
+    private function last_watched_map(array $user_ids) {
+        $user_ids = array_values(array_filter(array_map('intval', $user_ids)));
+        if (!$user_ids) return [];
+        global $wpdb;
+        $views = self::table('video_views');
+        $in = implode(',', $user_ids); // ints only, cast above
+        $rows = $wpdb->get_results("SELECT user_id, MAX(last_viewed_at) AS last FROM {$views} WHERE user_id IN ({$in}) GROUP BY user_id");
+        $out = [];
+        foreach ((array) $rows as $r) $out[(int) $r->user_id] = $r->last;
+        return $out;
+    }
+
+    private function shape_user(WP_User $u, array $last_watched) {
+        return [
+            'id' => (int) $u->ID,
+            'displayName' => $u->display_name,
+            'email' => $u->user_email,
+            'username' => $u->user_login,
+            'roles' => array_values((array) $u->roles),
+            'registered' => $u->user_registered,
+            'lastWatched' => isset($last_watched[(int) $u->ID]) ? $last_watched[(int) $u->ID] : null,
+            'manageable' => $this->user_is_manageable($u),
+        ];
+    }
+
+    public function ajax_users_list() {
+        $this->require_admin_ajax();
+        $search = isset($_POST['search']) ? trim(sanitize_text_field((string) $_POST['search'])) : '';
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        $page = max(1, isset($_POST['page']) ? (int) $_POST['page'] : 1);
+        $per_page = 25;
+
+        $args = [
+            'number' => $per_page,
+            'paged' => $page,
+            'count_total' => true,
+            'orderby' => 'registered',
+            'order' => 'DESC',
+        ];
+        if ($search !== '') {
+            $args['search'] = '*' . $search . '*';
+            $args['search_columns'] = ['user_login', 'user_email', 'display_name'];
+        }
+        if ($role !== '' && in_array($role, $this->assignable_role_keys(), true)) {
+            $args['role'] = $role;
+        }
+
+        $q = new WP_User_Query($args);
+        $users = (array) $q->get_results();
+        $last = $this->last_watched_map(array_map(function ($u) { return $u->ID; }, $users));
+        $total = (int) $q->get_total();
+
+        $this->json_success([
+            'users' => array_map(function ($u) use ($last) { return $this->shape_user($u, $last); }, $users),
+            'total' => $total,
+            'page' => $page,
+            'pages' => max(1, (int) ceil($total / $per_page)),
+        ]);
+    }
+
+    public function ajax_user_create() {
+        $this->require_admin_ajax();
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        if (!Anchor_FM_User_Admin::valid_role($role, $this->assignable_role_keys())) {
+            $this->json_error('Please choose a valid role.');
+        }
+        $row = [
+            'username' => isset($_POST['username']) ? (string) wp_unslash($_POST['username']) : '',
+            'first_name' => isset($_POST['first_name']) ? (string) wp_unslash($_POST['first_name']) : '',
+            'last_name' => isset($_POST['last_name']) ? (string) wp_unslash($_POST['last_name']) : '',
+            'email' => isset($_POST['email']) ? (string) wp_unslash($_POST['email']) : '',
+            'password' => isset($_POST['password']) ? (string) wp_unslash($_POST['password']) : '',
+        ];
+        $send_email = !empty($_POST['send_email']) && $_POST['send_email'] !== '0';
+        $batch = []; $seen = [];
+        $r = $this->create_portal_user($row, $role, '', $send_email, $batch, $seen);
+        if ($r['status'] !== 'created') {
+            $this->json_error($r['message'] ?: 'Could not create the user.');
+        }
+        $this->log_activity(get_current_user_id(), 'user_create', 'user', $r['user_id'], [
+            'role' => $role, 'emailed' => $send_email, 'explicit_password' => trim($row['password']) !== '',
+        ]);
+        $u = get_user_by('id', $r['user_id']);
+        $this->json_success(['user' => $this->shape_user($u, [])]);
+    }
+
+    public function ajax_user_set_role() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        if (!Anchor_FM_User_Admin::valid_role($role, $this->assignable_role_keys())) {
+            $this->json_error('Please choose a valid role.');
+        }
+        $u->set_role($role);
+        $this->log_activity(get_current_user_id(), 'user_set_role', 'user', (int) $u->ID, ['role' => $role]);
+        $fresh = get_user_by('id', (int) $u->ID);
+        $this->json_success(['user' => $this->shape_user($fresh, $this->last_watched_map([(int) $u->ID]))]);
+    }
+
+    public function ajax_user_set_password() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        $pw = isset($_POST['password']) ? trim((string) wp_unslash($_POST['password'])) : '';
+        $pv = Anchor_FM_User_Admin::validate_password($pw);
+        if (!$pv['ok']) $this->json_error($pv['error']);
+        wp_set_password($pw, (int) $u->ID);
+        $this->log_activity(get_current_user_id(), 'user_set_password', 'user', (int) $u->ID, []);
+        $this->json_success(['saved' => true]);
+    }
+
+    public function ajax_user_send_reset() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        $sent = $this->send_password_reset_email($u);
+        if (is_wp_error($sent)) $this->json_error($sent->get_error_message(), 400);
+        $this->log_activity(get_current_user_id(), 'user_send_reset', 'user', (int) $u->ID, []);
+        $this->json_success(['sent' => true]);
+    }
+
+    public function ajax_user_delete() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        require_once ABSPATH . 'wp-admin/includes/user.php';
+        $id = (int) $u->ID;
+        $email = $u->user_email;
+        if (!wp_delete_user($id)) $this->json_error('Could not remove the user.', 500);
+        $this->log_activity(get_current_user_id(), 'user_delete', 'user', $id, ['email' => $email]);
+        $this->json_success(['deleted' => true]);
+    }
+
+    /**
+     * Fires for deletions from here and from wp-admin. User conditions inside
+     * permission_policies JSON are left alone: they match nobody once the user
+     * is gone, and MySQL does not reuse user IDs.
+     */
+    public function on_deleted_user($user_id) {
+        global $wpdb;
+        $user_id = (int) $user_id;
+        if ($user_id <= 0) return;
+        $wpdb->delete(self::table('permissions'), ['subject_type' => 'user', 'subject_key' => (string) $user_id], ['%s', '%s']);
+        $wpdb->delete(self::table('video_views'), ['user_id' => $user_id], ['%d']);
     }
 
     private function get_editable_roles_for_permissions() {
