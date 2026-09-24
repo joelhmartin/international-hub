@@ -1,0 +1,25 @@
+# User Manager 2.15.0 — Staging Verification
+
+Run on a staging copy with the plugin updated from 2.14.x, logged in as an administrator.
+
+## Branding
+- [ ] International staging: sidebar logo shows (site icon), Settings → Anchor File Manager → Request-access recipient reads tiffany@tmjtherapycentre.com.
+- [ ] Fresh install (STL staging): recipient defaults to the site admin email; setting a Portal logo URL changes the sidebar image; clearing it falls back to the site icon.
+
+## Users tab
+- [ ] Tab reads "Users"; list loads with Added and Last watched columns; administrators and yourself show "—" for actions.
+- [ ] Search by partial email finds the user; role filter narrows; Prev/Next page when >25 users.
+- [ ] Add person with no password + email checked → user receives the WP set-password email.
+- [ ] Add person with password "Welcome2026!" → can log in with it immediately.
+- [ ] Add person with a 9-character password → error "Password must be at least 10 characters", no user created.
+- [ ] Add person with an existing email → "Email already exists".
+- [ ] Import a 4-column CSV → users created with generated passwords.
+- [ ] Import with "Password for everyone" set → each user logs in with it; a row with its own password uses that one.
+- [ ] Import with a 5-character batch password → whole import refused, nobody created.
+- [ ] Change role → the user loses/gains the matching folder on next load.
+- [ ] Set password → the user logs in with the new one.
+- [ ] Email reset → email arrives.
+- [ ] Remove → user gone from list and wp-admin; their rows gone from wp_anchor_fm_permissions (subject_type='user') and wp_anchor_fm_video_views.
+- [ ] Deleting a user in wp-admin also clears those rows.
+- [ ] Open "Add person", switch to the Account tab, return to Documents, open a folder's Permissions and Save → permissions save normally (no stray user-manager handler).
+- [ ] As a non-admin: no Users tab; POSTing anchor_fm_users_list returns 403.
