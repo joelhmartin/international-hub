@@ -32,6 +32,7 @@ jQuery(function ($) {
     const $resizer = $root.find('[data-afm-resizer]');
 
     const productDocsFolderId = Number(AnchorFM.productDocsFolderId || 0);
+    let externalModalHandler = null;
     const state = {
         tab: 'files',
         tree: [],
@@ -517,6 +518,7 @@ jQuery(function ($) {
         state.policyDraft = { operator: 'any', rules: [] };
         state.modalMode = '';
         state.modalPayload = null;
+        externalModalHandler = null;
         $modalBody.html('');
         $modal.find('.afm__modalPanel').removeClass('afm__modalPanel--viewer');
         $modal.find('.afm__modalFooter [data-afm-action="modal-primary"]').show();
@@ -1536,6 +1538,10 @@ jQuery(function ($) {
     }
 
     function handleModalPrimary() {
+        if (state.modalMode === 'external') {
+            if (typeof externalModalHandler === 'function') externalModalHandler($modalBody);
+            return;
+        }
         if (state.modalMode === 'save-permissions') {
             savePermissions();
             return;
@@ -2079,79 +2085,6 @@ jQuery(function ($) {
     $root.on('click', '[data-afm-action="close-modal"]', closeModal);
     $root.on('click', '[data-afm-action="modal-primary"]', handleModalPrimary);
 
-    // --- Bulk user import (admin) ---
-    function populateImportRoles() {
-        const $sel = $root.find('[data-afm-import-role]');
-        if (!$sel.length) return;
-        const roles = Array.isArray(AnchorFM.roles) ? AnchorFM.roles : [];
-        const def = AnchorFM.defaultRole || '';
-        $sel.html(roles.map(function (r) {
-            const sel = r.key === def ? ' selected' : '';
-            return `<option value="${esc(r.key)}"${sel}>${esc(r.label)}</option>`;
-        }).join(''));
-    }
-
-    function showImportMessage(msg) {
-        $root.find('[data-afm-import-results]')
-            .html(`<div class="afm__importSummary afm__importSummary--error">${esc(msg)}</div>`)
-            .prop('hidden', false);
-    }
-
-    function renderImportResults(res) {
-        const rows = Array.isArray(res.rows) ? res.rows : [];
-        const summary = `${res.created || 0} created, ${res.skipped || 0} skipped, ${res.errors || 0} error(s)`;
-        const body = rows.map(function (r) {
-            return `<tr class="afm__importRow afm__importRow--${esc(r.status)}">`
-                + `<td>${esc(String(r.line || ''))}</td>`
-                + `<td>${esc(r.username || '')}</td>`
-                + `<td>${esc(r.email || '')}</td>`
-                + `<td>${esc(r.status || '')}</td>`
-                + `<td>${esc(r.message || '')}</td>`
-                + `</tr>`;
-        }).join('');
-        $root.find('[data-afm-import-results]').html(
-            `<div class="afm__importSummary">${esc(summary)}</div>`
-            + `<table class="afm__importTable"><thead><tr>`
-            + `<th>#</th><th>Username</th><th>Email</th><th>Status</th><th>Message</th>`
-            + `</tr></thead><tbody>${body}</tbody></table>`
-        ).prop('hidden', false);
-    }
-
-    $root.on('click', '[data-afm-action="bulk-import-users"]', function (e) {
-        e.preventDefault();
-        if (!AnchorFM.isAdmin) return;
-        const $btn = $(this);
-        const fileInput = $root.find('[data-afm-import-file]')[0];
-        const file = fileInput && fileInput.files && fileInput.files[0];
-        if (!file) { showImportMessage('Please choose a CSV file first.'); return; }
-
-        const data = new FormData();
-        data.append('action', 'anchor_fm_bulk_import_users');
-        data.append('nonce', AnchorFM.nonce);
-        data.append('role', $root.find('[data-afm-import-role]').val() || '');
-        data.append('send_email', $root.find('[data-afm-import-email]').is(':checked') ? '1' : '0');
-        data.append('csv', file, file.name);
-
-        $btn.prop('disabled', true);
-        $root.addClass('afm--busy');
-        $.ajax({ url: AnchorFM.ajax, method: 'POST', data, processData: false, contentType: false })
-            .done(function (resp) {
-                if (resp && resp.success) {
-                    renderImportResults(resp.data);
-                } else {
-                    showImportMessage((resp && resp.data && resp.data.message) || 'Import failed.');
-                }
-            })
-            .fail(function (xhr) {
-                const msg = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message;
-                showImportMessage(msg || 'Import failed.');
-            })
-            .always(function () {
-                $btn.prop('disabled', false);
-                $root.removeClass('afm--busy');
-            });
-    });
-
     $(document).on('click', function (e) {
         if ($menu.prop('hidden')) return;
         if ($(e.target).closest('[data-afm-menu]').length) return;
@@ -2658,6 +2591,12 @@ jQuery(function ($) {
 
     $root.on('keydown', function (e) {
         if ($(e.target).is('input, textarea, [contenteditable]')) return;
+        // state.tab is initialized to 'files' but never updated when another
+        // panel (Users, Account, etc.) or the modal takes focus, so it can't
+        // gate this handler. Guard on the actual DOM location instead: Enter
+        // on a button inside the modal or the Users panel must not fall
+        // through to "open the active/first files-grid row".
+        if ($(e.target).closest('[data-afm-modal], [data-apfm-panel="users"]').length) return;
         const $rows = $grid.find('.afm__row');
         if (!$rows.length) return;
         let idx = $rows.index($grid.find('.afm__row.is-active'));
@@ -3253,6 +3192,24 @@ jQuery(function ($) {
         loadProducts();
     });
 
-    if (AnchorFM.isAdmin) populateImportRoles();
     bootstrap();
+
+    // Shared UI for sibling scripts (user-manager.js) so they reuse this
+    // modal, request helper and toast instead of carrying their own.
+    window.AnchorFMUI = {
+        api, esc, toast, errMessage,
+        modal: {
+            open(title, bodyHtml, primaryLabel, onPrimary) {
+                closeModal();
+                $modalTitle.text(title);
+                $modalBody.html(bodyHtml);
+                setModalPrimary(primaryLabel || 'Save', 'external', null);
+                externalModalHandler = onPrimary;
+                openModal();
+            },
+            close: closeModal,
+            busy: setModalBusy,
+            body: () => $modalBody,
+        },
+    };
 });

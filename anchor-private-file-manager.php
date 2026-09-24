@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.14.0
+ * Version: 2.15.0
  * Author: Anchor Corps
  */
 
@@ -12,6 +12,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-coverage.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-media-progress.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-admin.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.php';
@@ -19,7 +20,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-index.ph
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.14.0';
+    const VERSION = '2.15.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -44,7 +45,18 @@ class Anchor_Private_File_Manager {
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
     const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
     const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
-    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
+    const OPT_PORTAL_LOGO = 'anchor_fm_portal_logo';
+    /**
+     * International ran on this hardcoded default before it became a setting.
+     * Only the 2.15.0 upgrade uses it, to pin that behavior on existing installs.
+     */
+    const LEGACY_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
+    /**
+     * International ran on this hardcoded favicon before the logo became a
+     * setting. Only the 2.15.0 upgrade uses it, to pin that behavior on
+     * existing installs.
+     */
+    const LEGACY_PORTAL_LOGO = 'https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png';
 
     private static $instance = null;
     private $portal_rendered = false;
@@ -91,6 +103,13 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_set_permissions', [$this, 'ajax_set_permissions']);
         add_action('wp_ajax_anchor_fm_user_search', [$this, 'ajax_user_search']);
         add_action('wp_ajax_anchor_fm_bulk_import_users', [$this, 'ajax_bulk_import_users']);
+        add_action('wp_ajax_anchor_fm_users_list', [$this, 'ajax_users_list']);
+        add_action('wp_ajax_anchor_fm_user_create', [$this, 'ajax_user_create']);
+        add_action('wp_ajax_anchor_fm_user_set_role', [$this, 'ajax_user_set_role']);
+        add_action('wp_ajax_anchor_fm_user_set_password', [$this, 'ajax_user_set_password']);
+        add_action('wp_ajax_anchor_fm_user_send_reset', [$this, 'ajax_user_send_reset']);
+        add_action('wp_ajax_anchor_fm_user_delete', [$this, 'ajax_user_delete']);
+        add_action('deleted_user', [$this, 'on_deleted_user']);
 
         add_action('wp_ajax_anchor_ap_orders', [$this, 'ajax_ap_orders']);
         add_action('wp_ajax_anchor_ap_order', [$this, 'ajax_ap_order']);
@@ -182,8 +201,15 @@ class Anchor_Private_File_Manager {
     }
 
     private function get_request_access_email() {
-        $email = sanitize_email((string) get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL));
-        return $email ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+        $admin = (string) get_option('admin_email');
+        $email = sanitize_email((string) get_option(self::OPT_REQUEST_ACCESS_EMAIL, $admin));
+        return $email ?: $admin;
+    }
+
+    private function portal_logo_url() {
+        $url = (string) get_option(self::OPT_PORTAL_LOGO, '');
+        if ($url !== '') return $url;
+        return (string) get_site_icon_url(96);
     }
 
     public function register_settings_page() {
@@ -212,10 +238,16 @@ class Anchor_Private_File_Manager {
         register_setting('anchor_private_file_manager', self::OPT_REQUEST_ACCESS_EMAIL, [
             'type' => 'string',
             'sanitize_callback' => function ($v) {
-                $v = sanitize_email((string) $v);
-                return $v ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+                // Blank is allowed and means "use the admin email at send time",
+                // so a later admin_email change still takes effect.
+                return sanitize_email((string) $v);
             },
-            'default' => self::DEFAULT_REQUEST_ACCESS_EMAIL,
+            'default' => '',
+        ]);
+        register_setting('anchor_private_file_manager', self::OPT_PORTAL_LOGO, [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) { return esc_url_raw(trim((string) $v)); },
+            'default' => '',
         ]);
     }
 
@@ -246,10 +278,17 @@ class Anchor_Private_File_Manager {
                         </td>
                     </tr>
                     <tr>
+                        <th scope="row">Portal logo URL</th>
+                        <td>
+                            <input type="url" class="regular-text" name="<?php echo esc_attr(self::OPT_PORTAL_LOGO); ?>" value="<?php echo esc_attr(get_option(self::OPT_PORTAL_LOGO, '')); ?>">
+                            <p class="description">Shown in the portal sidebar. Leave blank to use the site icon (Settings → General); if there is no site icon, no logo is shown.</p>
+                        </td>
+                    </tr>
+                    <tr>
                         <th scope="row">Request-access recipient</th>
                         <td>
-                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL)); ?>">
-                            <p class="description">Where "Request access" messages are sent.</p>
+                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, '')); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
+                            <p class="description">Where "Request access" messages are sent. Leave blank to use the site admin email.</p>
                         </td>
                     </tr>
                 </table>
@@ -645,12 +684,47 @@ class Anchor_Private_File_Manager {
         return $result !== false;
     }
 
+    /**
+     * True only for International's own host (production or a staging copy
+     * that still resolves under its domain). Gates the 2.15.0 pin below so it
+     * touches nobody else's site, even other installs that ran pre-2.15
+     * releases of this plugin.
+     */
+    private static function is_legacy_international_host() {
+        $host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
+        $suffix = '.tmjtherapycentre.com';
+        return $host === 'tmjtherapycentre.com' || substr($host, -strlen($suffix)) === $suffix;
+    }
+
     private function maybe_upgrade_db() {
         $installed = (string) get_option(self::OPT_DB_VERSION, '0');
         if (version_compare($installed, self::VERSION, '<')) {
             // Whether this site predates coverage tracking. Must be captured
             // before the option is bumped, and applied only once.
             $pre_coverage = version_compare($installed, '2.12.0', '<');
+
+            // International (and only International, identified by host) ran
+            // on hardcoded pre-2.15 defaults for the access-request recipient
+            // and the sidebar logo. This pins both to their old values so the
+            // 2.15.0 upgrade doesn't silently reroute requests to the site
+            // admin or swap the logo out from under them. It's host-gated
+            // rather than "any install below 2.15.0" because other sites may
+            // also have run 2.14 or earlier and must NOT inherit
+            // International's hardcoded values — only get the new
+            // admin-email / site-icon defaults introduced in 2.15.0.
+            // Fresh installs never reach this at all: activate() stamps the
+            // current version only after schema work succeeds, so $installed
+            // is '0' there (and stays '0', retried on the next load, if a
+            // fresh activation's schema work fails).
+            if ($installed !== '0' && version_compare($installed, '2.15.0', '<')
+                && self::is_legacy_international_host()) {
+                if (get_option(self::OPT_REQUEST_ACCESS_EMAIL, null) === null) {
+                    update_option(self::OPT_REQUEST_ACCESS_EMAIL, self::LEGACY_REQUEST_ACCESS_EMAIL);
+                }
+                if (get_option(self::OPT_PORTAL_LOGO, null) === null && get_site_icon_url(96) === '') {
+                    update_option(self::OPT_PORTAL_LOGO, self::LEGACY_PORTAL_LOGO);
+                }
+            }
 
             self::ensure_links_table();
             $policies_ok = self::ensure_permission_policies_table();
@@ -727,6 +801,17 @@ class Anchor_Private_File_Manager {
             true
         );
 
+        if (current_user_can('administrator')) {
+            $um_path = plugin_dir_path(__FILE__) . 'assets/js/user-manager.js';
+            wp_enqueue_script(
+                'anchor-fm-user-manager',
+                plugin_dir_url(__FILE__) . 'assets/js/user-manager.js',
+                ['jquery', 'anchor-file-manager'],
+                file_exists($um_path) ? (string) filemtime($um_path) : self::VERSION,
+                true
+            );
+        }
+
         wp_localize_script('anchor-file-manager', 'AnchorFM', [
             'ajax' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce(self::NONCE_ACTION),
@@ -751,7 +836,7 @@ class Anchor_Private_File_Manager {
                 'noFiles' => __('No files here yet.', 'anchor-private-file-manager'),
                 'noFolders' => __('No folders.', 'anchor-private-file-manager'),
                 'productDocs' => __('Product Docs', 'anchor-private-file-manager'),
-                'addUsers' => __('Add Users', 'anchor-private-file-manager'),
+                'users' => __('Users', 'anchor-private-file-manager'),
             ],
         ]);
 
@@ -803,7 +888,9 @@ class Anchor_Private_File_Manager {
             <div class="afm__frame">
                 <aside class="afm__sidebar" aria-label="<?php esc_attr_e('Account navigation and folders', 'anchor-private-file-manager'); ?>">
                     <div class="afm__brand">
-                        <img class="afm__brandMark" src="https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png" aria-hidden="true"></img>
+                        <?php $logo = $this->portal_logo_url(); if ($logo !== '') : ?>
+                        <img class="afm__brandMark" src="<?php echo esc_url($logo); ?>" alt="" aria-hidden="true">
+                        <?php endif; ?>
                         <div class="afm__brandText">
                             <div class="afm__brandTitle"><?php esc_html_e('My Account', 'anchor-private-file-manager'); ?></div>
                             <div class="afm__brandSub"><?php echo esc_html($user->display_name); ?></div>
@@ -831,7 +918,7 @@ class Anchor_Private_File_Manager {
                         <?php if (current_user_can('administrator')) : ?>
                         <button type="button" class="aap__navItem" data-apfm-tab="users">
                             <span class="dashicons dashicons-groups" aria-hidden="true"></span>
-                            <?php esc_html_e('Add Users', 'anchor-private-file-manager'); ?>
+                            <?php esc_html_e('Users', 'anchor-private-file-manager'); ?>
                         </button>
                         <?php endif; ?>
                         <button type="button" class="aap__navItem" data-apfm-tab="account">
@@ -948,30 +1035,24 @@ class Anchor_Private_File_Manager {
 
                         <?php if (current_user_can('administrator')) : ?>
                         <div class="afm__panel aap__panel" data-apfm-panel="users" data-afm-panel="users">
-                            <div class="afm__cardBox afm__userImport">
-                                <div class="afm__sectionTitle"><?php esc_html_e('Bulk import users', 'anchor-private-file-manager'); ?></div>
-                                <p class="afm__importHint">
-                                    <?php esc_html_e('Upload a CSV with columns in this order: username, first name, last name, email. A header row is optional. Username is optional — when blank it becomes the first initial, a period, then the last name (e.g. j.smith). Passwords are generated automatically.', 'anchor-private-file-manager'); ?>
-                                </p>
-                                <div class="afm__formRow">
-                                    <label class="afm__label" for="afm-import-file"><?php esc_html_e('CSV file', 'anchor-private-file-manager'); ?></label>
-                                    <input type="file" id="afm-import-file" class="afm__importFile" accept=".csv,text/csv,text/plain" data-afm-import-file>
-                                </div>
-                                <div class="afm__formRow">
-                                    <label class="afm__label" for="afm-import-role"><?php esc_html_e('Assign role', 'anchor-private-file-manager'); ?></label>
-                                    <select id="afm-import-role" class="afm__select" data-afm-import-role></select>
-                                </div>
-                                <label class="afm__check">
-                                    <input type="checkbox" data-afm-import-email checked>
-                                    <?php esc_html_e('Email new users a link to set their password', 'anchor-private-file-manager'); ?>
-                                </label>
-                                <div class="afm__formActions">
-                                    <button type="button" class="afm__btn afm__btn--primary" data-afm-action="bulk-import-users">
-                                        <span class="dashicons dashicons-upload" aria-hidden="true"></span>
-                                        <?php esc_html_e('Import users', 'anchor-private-file-manager'); ?>
+                            <div class="afm__users" data-afm-users>
+                                <div class="afm__usersBar">
+                                    <label class="afm__search afm__usersSearch">
+                                        <span class="dashicons dashicons-search" aria-hidden="true"></span>
+                                        <input type="search" placeholder="<?php esc_attr_e('Search name, email or username…', 'anchor-private-file-manager'); ?>" data-afm-users-search>
+                                    </label>
+                                    <select class="afm__select afm__usersRole" data-afm-users-role></select>
+                                    <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="users-import">
+                                        <span class="dashicons dashicons-media-spreadsheet" aria-hidden="true"></span>
+                                        <?php esc_html_e('Import CSV', 'anchor-private-file-manager'); ?>
+                                    </button>
+                                    <button type="button" class="afm__btn afm__btn--primary" data-afm-action="users-add">
+                                        <span class="dashicons dashicons-plus" aria-hidden="true"></span>
+                                        <?php esc_html_e('Add person', 'anchor-private-file-manager'); ?>
                                     </button>
                                 </div>
-                                <div class="afm__importResults" data-afm-import-results hidden></div>
+                                <div class="afm__usersTable" data-afm-users-table></div>
+                                <div class="afm__usersPager" data-afm-users-pager></div>
                             </div>
                         </div>
                         <?php endif; ?>
@@ -4163,6 +4244,62 @@ class Anchor_Private_File_Manager {
         $this->json_success(['users' => $out]);
     }
 
+    /**
+     * One user through the same pipeline whether they came from a CSV row or
+     * the "Add person" form: sanitize, validate, de-duplicate, derive a unique
+     * username, resolve the password, insert, optionally notify.
+     */
+    private function create_portal_user(array $row, $role, $default_password, $send_email, array &$batch_usernames, array &$seen_emails) {
+        $row = array_merge(['username' => '', 'first_name' => '', 'last_name' => '', 'email' => '', 'password' => ''], $row);
+        $row['first_name'] = sanitize_text_field($row['first_name']);
+        $row['last_name']  = sanitize_text_field($row['last_name']);
+        $row['email']      = Anchor_FM_User_Import::normalize_email($row['email']);
+        $row['username']   = Anchor_FM_User_Import::sanitize_username($row['username']);
+        $out = ['status' => 'error', 'message' => '', 'username' => $row['username'], 'email' => $row['email'], 'user_id' => 0];
+
+        $v = Anchor_FM_User_Import::validate($row);
+        if (!$v['ok']) { $out['message'] = $v['error']; return $out; }
+
+        $pw = Anchor_FM_User_Admin::resolve_password($row['password'], $default_password);
+        if ($pw['source'] === 'row') {
+            $pv = Anchor_FM_User_Admin::validate_password($pw['password']);
+            if (!$pv['ok']) { $out['message'] = $pv['error']; return $out; }
+        }
+        $password = $pw['source'] === 'generate' ? wp_generate_password(16, true, false) : $pw['password'];
+
+        if (isset($seen_emails[$row['email']]) || email_exists($row['email'])) {
+            $out['status'] = 'skipped';
+            $out['message'] = 'Email already exists';
+            return $out;
+        }
+
+        $base = $row['username'] !== '' ? $row['username'] : Anchor_FM_User_Import::derive_username($row['first_name'], $row['last_name']);
+        $username = Anchor_FM_User_Import::make_unique($base, function ($name) use ($batch_usernames) {
+            return isset($batch_usernames[$name]) || username_exists($name);
+        });
+        $out['username'] = $username;
+
+        $user_id = wp_insert_user([
+            'user_login'   => $username,
+            'user_email'   => $row['email'],
+            'user_pass'    => $password,
+            'first_name'   => $row['first_name'],
+            'last_name'    => $row['last_name'],
+            'display_name' => trim($row['first_name'] . ' ' . $row['last_name']),
+            'role'         => $role,
+        ]);
+        if (is_wp_error($user_id)) { $out['message'] = $user_id->get_error_message(); return $out; }
+
+        $batch_usernames[$username] = true;
+        $seen_emails[$row['email']] = true;
+        if ($send_email) {
+            wp_new_user_notification($user_id, null, 'user');
+        }
+        $out['status'] = 'created';
+        $out['user_id'] = (int) $user_id;
+        return $out;
+    }
+
     public function ajax_bulk_import_users() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -4170,11 +4307,17 @@ class Anchor_Private_File_Manager {
 
         // Role (one for the whole batch; administrator not allowed).
         $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
-        $valid_roles = array_column($this->get_editable_roles_for_permissions(), 'key');
-        if ($role === '' || !in_array($role, $valid_roles, true)) {
+        if (!Anchor_FM_User_Admin::valid_role($role, array_column($this->get_editable_roles_for_permissions(), 'key'))) {
             $this->json_error('Please choose a valid role.');
         }
         $send_email = !empty($_POST['send_email']) && $_POST['send_email'] !== '0';
+
+        // A bad batch default would fail every row the same way; refuse up front.
+        $default_password = isset($_POST['default_password']) ? trim((string) wp_unslash($_POST['default_password'])) : '';
+        if ($default_password !== '') {
+            $dv = Anchor_FM_User_Admin::validate_password($default_password);
+            if (!$dv['ok']) $this->json_error($dv['error']);
+        }
 
         // Uploaded CSV.
         if (empty($_FILES['csv']) || !isset($_FILES['csv']['tmp_name']) || $_FILES['csv']['error'] !== UPLOAD_ERR_OK) {
@@ -4200,58 +4343,11 @@ class Anchor_Private_File_Manager {
         $batch_usernames = [];
 
         foreach ($rows as $row) {
-            $line = (int) $row['line'];
-            $row['first_name'] = sanitize_text_field($row['first_name']);
-            $row['last_name']  = sanitize_text_field($row['last_name']);
-            $row['email']      = Anchor_FM_User_Import::normalize_email($row['email']);
-            $row['username']   = Anchor_FM_User_Import::sanitize_username($row['username']);
-
-            $v = Anchor_FM_User_Import::validate($row);
-            if (!$v['ok']) {
-                $errors++;
-                $report[] = ['line' => $line, 'username' => $row['username'], 'email' => $row['email'], 'status' => 'error', 'message' => $v['error']];
-                continue;
-            }
-
-            // Duplicate email: existing WP user or repeated within this CSV.
-            if (isset($seen_emails[$row['email']]) || email_exists($row['email'])) {
-                $skipped++;
-                $report[] = ['line' => $line, 'username' => $row['username'], 'email' => $row['email'], 'status' => 'skipped', 'message' => 'Email already exists'];
-                continue;
-            }
-
-            // Username: supplied or derived; made unique vs WP + this batch.
-            $base = $row['username'] !== '' ? $row['username'] : Anchor_FM_User_Import::derive_username($row['first_name'], $row['last_name']);
-            $username = Anchor_FM_User_Import::make_unique($base, function ($name) use ($batch_usernames) {
-                return isset($batch_usernames[$name]) || username_exists($name);
-            });
-
-            $password = wp_generate_password(16, true, false);
-            $user_id = wp_insert_user([
-                'user_login'   => $username,
-                'user_email'   => $row['email'],
-                'user_pass'    => $password,
-                'first_name'   => $row['first_name'],
-                'last_name'    => $row['last_name'],
-                'display_name' => trim($row['first_name'] . ' ' . $row['last_name']),
-                'role'         => $role,
-            ]);
-
-            if (is_wp_error($user_id)) {
-                $errors++;
-                $report[] = ['line' => $line, 'username' => $username, 'email' => $row['email'], 'status' => 'error', 'message' => $user_id->get_error_message()];
-                continue;
-            }
-
-            $batch_usernames[$username] = true;
-            $seen_emails[$row['email']] = true;
-            $created++;
-
-            if ($send_email) {
-                wp_new_user_notification($user_id, null, 'user');
-            }
-
-            $report[] = ['line' => $line, 'username' => $username, 'email' => $row['email'], 'status' => 'created', 'message' => ''];
+            $r = $this->create_portal_user($row, $role, $default_password, $send_email, $batch_usernames, $seen_emails);
+            if ($r['status'] === 'created') $created++;
+            elseif ($r['status'] === 'skipped') $skipped++;
+            else $errors++;
+            $report[] = ['line' => (int) $row['line'], 'username' => $r['username'], 'email' => $r['email'], 'status' => $r['status'], 'message' => $r['message']];
         }
 
         $this->log_activity(get_current_user_id(), 'bulk_import', 'user', 0, [
@@ -4260,6 +4356,7 @@ class Anchor_Private_File_Manager {
             'errors'  => $errors,
             'role'    => $role,
             'emailed' => $send_email,
+            'default_password' => $default_password !== '',
         ]);
 
         $this->json_success([
@@ -4268,6 +4365,174 @@ class Anchor_Private_File_Manager {
             'errors'  => $errors,
             'rows'    => $report,
         ]);
+    }
+
+    private function require_admin_ajax() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+        if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
+    }
+
+    private function assignable_role_keys() {
+        return array_column($this->get_editable_roles_for_permissions(), 'key');
+    }
+
+    private function user_is_manageable(WP_User $u) {
+        return Anchor_FM_User_Admin::is_manageable((array) $u->roles, (int) $u->ID, get_current_user_id())
+            && !user_can($u, 'administrator');
+    }
+
+    /** The posted user_id as a WP_User the current admin may act on, or a 403/404. */
+    private function manageable_target() {
+        $id = isset($_POST['user_id']) ? (int) $_POST['user_id'] : 0;
+        $u = $id > 0 ? get_user_by('id', $id) : false;
+        if (!$u) $this->json_error('User not found', 404);
+        if (!$this->user_is_manageable($u)) $this->json_error('This account cannot be changed here.', 403);
+        return $u;
+    }
+
+    /** user_id => latest last_viewed_at, in one query for a page of users. */
+    private function last_watched_map(array $user_ids) {
+        $user_ids = array_values(array_filter(array_map('intval', $user_ids)));
+        if (!$user_ids) return [];
+        global $wpdb;
+        $views = self::table('video_views');
+        $in = implode(',', $user_ids); // ints only, cast above
+        $rows = $wpdb->get_results("SELECT user_id, MAX(last_viewed_at) AS last FROM {$views} WHERE user_id IN ({$in}) GROUP BY user_id");
+        $out = [];
+        foreach ((array) $rows as $r) $out[(int) $r->user_id] = $r->last;
+        return $out;
+    }
+
+    private function shape_user(WP_User $u, array $last_watched) {
+        return [
+            'id' => (int) $u->ID,
+            'displayName' => $u->display_name,
+            'email' => $u->user_email,
+            'username' => $u->user_login,
+            'roles' => array_values((array) $u->roles),
+            'registered' => $u->user_registered,
+            'lastWatched' => isset($last_watched[(int) $u->ID]) ? $last_watched[(int) $u->ID] : null,
+            'manageable' => $this->user_is_manageable($u),
+        ];
+    }
+
+    public function ajax_users_list() {
+        $this->require_admin_ajax();
+        $search = isset($_POST['search']) ? trim(sanitize_text_field(wp_unslash((string) $_POST['search']))) : '';
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        $page = max(1, isset($_POST['page']) ? (int) $_POST['page'] : 1);
+        $per_page = 25;
+
+        $args = [
+            'number' => $per_page,
+            'paged' => $page,
+            'count_total' => true,
+            'orderby' => 'registered',
+            'order' => 'DESC',
+        ];
+        if ($search !== '') {
+            $args['search'] = '*' . $search . '*';
+            $args['search_columns'] = ['user_login', 'user_email', 'display_name'];
+        }
+        if ($role !== '' && in_array($role, $this->assignable_role_keys(), true)) {
+            $args['role'] = $role;
+        }
+
+        $q = new WP_User_Query($args);
+        $users = (array) $q->get_results();
+        $last = $this->last_watched_map(array_map(function ($u) { return $u->ID; }, $users));
+        $total = (int) $q->get_total();
+
+        $this->json_success([
+            'users' => array_map(function ($u) use ($last) { return $this->shape_user($u, $last); }, $users),
+            'total' => $total,
+            'page' => $page,
+            'pages' => max(1, (int) ceil($total / $per_page)),
+        ]);
+    }
+
+    public function ajax_user_create() {
+        $this->require_admin_ajax();
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        if (!Anchor_FM_User_Admin::valid_role($role, $this->assignable_role_keys())) {
+            $this->json_error('Please choose a valid role.');
+        }
+        $row = [
+            'username' => isset($_POST['username']) ? (string) wp_unslash($_POST['username']) : '',
+            'first_name' => isset($_POST['first_name']) ? (string) wp_unslash($_POST['first_name']) : '',
+            'last_name' => isset($_POST['last_name']) ? (string) wp_unslash($_POST['last_name']) : '',
+            'email' => isset($_POST['email']) ? (string) wp_unslash($_POST['email']) : '',
+            'password' => isset($_POST['password']) ? (string) wp_unslash($_POST['password']) : '',
+        ];
+        $send_email = !empty($_POST['send_email']) && $_POST['send_email'] !== '0';
+        $batch = []; $seen = [];
+        $r = $this->create_portal_user($row, $role, '', $send_email, $batch, $seen);
+        if ($r['status'] !== 'created') {
+            $this->json_error($r['message'] ?: 'Could not create the user.');
+        }
+        $this->log_activity(get_current_user_id(), 'user_create', 'user', $r['user_id'], [
+            'role' => $role, 'emailed' => $send_email, 'explicit_password' => trim($row['password']) !== '',
+        ]);
+        $u = get_user_by('id', $r['user_id']);
+        $this->json_success(['user' => $this->shape_user($u, [])]);
+    }
+
+    public function ajax_user_set_role() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
+        if (!Anchor_FM_User_Admin::valid_role($role, $this->assignable_role_keys())) {
+            $this->json_error('Please choose a valid role.');
+        }
+        $u->set_role($role);
+        $this->log_activity(get_current_user_id(), 'user_set_role', 'user', (int) $u->ID, ['role' => $role]);
+        $fresh = get_user_by('id', (int) $u->ID);
+        $this->json_success(['user' => $this->shape_user($fresh, $this->last_watched_map([(int) $u->ID]))]);
+    }
+
+    public function ajax_user_set_password() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        $pw = isset($_POST['password']) ? trim((string) wp_unslash($_POST['password'])) : '';
+        $pv = Anchor_FM_User_Admin::validate_password($pw);
+        if (!$pv['ok']) $this->json_error($pv['error']);
+        wp_set_password($pw, (int) $u->ID);
+        $this->log_activity(get_current_user_id(), 'user_set_password', 'user', (int) $u->ID, []);
+        $this->json_success(['saved' => true]);
+    }
+
+    public function ajax_user_send_reset() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        $sent = $this->send_password_reset_email($u);
+        if (is_wp_error($sent)) $this->json_error($sent->get_error_message(), 400);
+        $this->log_activity(get_current_user_id(), 'user_send_reset', 'user', (int) $u->ID, []);
+        $this->json_success(['sent' => true]);
+    }
+
+    public function ajax_user_delete() {
+        $this->require_admin_ajax();
+        $u = $this->manageable_target();
+        require_once ABSPATH . 'wp-admin/includes/user.php';
+        $id = (int) $u->ID;
+        $email = $u->user_email;
+        if (!wp_delete_user($id, get_current_user_id())) $this->json_error('Could not remove the user.', 500);
+        $this->log_activity(get_current_user_id(), 'user_delete', 'user', $id, ['email' => $email]);
+        $this->json_success(['deleted' => true]);
+    }
+
+    /**
+     * Fires for deletions from here and from wp-admin. User conditions inside
+     * permission_policies JSON are left alone: they match nobody once the user
+     * is gone, and MySQL does not reuse user IDs.
+     */
+    public function on_deleted_user($user_id) {
+        global $wpdb;
+        $user_id = (int) $user_id;
+        if ($user_id <= 0) return;
+        $wpdb->delete(self::table('permissions'), ['subject_type' => 'user', 'subject_key' => (string) $user_id], ['%s', '%s']);
+        $wpdb->delete(self::table('video_views'), ['user_id' => $user_id], ['%d']);
     }
 
     private function get_editable_roles_for_permissions() {
@@ -4483,8 +4748,9 @@ class Anchor_Private_File_Manager {
         $user_id = get_current_user_id();
         $new = isset($_POST['new_password']) ? (string) $_POST['new_password'] : '';
         $new = trim($new);
-        if (strlen($new) < 10) {
-            $this->json_error('Password must be at least 10 characters', 400);
+        $pv = Anchor_FM_User_Admin::validate_password($new);
+        if (!$pv['ok']) {
+            $this->json_error($pv['error'], 400);
         }
 
         $user = get_user_by('id', $user_id);
@@ -4495,17 +4761,11 @@ class Anchor_Private_File_Manager {
         $this->json_success(['saved' => true, 'requiresReauth' => true, 'loginUrl' => wp_login_url()]);
     }
 
-    public function ajax_ap_send_reset() {
-        $this->require_nonce();
-        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
-
-        $user = wp_get_current_user();
-        if (!$user || empty($user->user_email)) $this->json_error('No email on account', 400);
-
+    /** The password-reset email the Security tab and the Users manager both send. */
+    private function send_password_reset_email(WP_User $user) {
+        if (empty($user->user_email)) return new WP_Error('no_email', 'No email on account');
         $key = get_password_reset_key($user);
-        if (is_wp_error($key)) {
-            $this->json_error($key->get_error_message(), 400);
-        }
+        if (is_wp_error($key)) return $key;
 
         $reset_url = network_site_url('wp-login.php?action=rp&key=' . rawurlencode($key) . '&login=' . rawurlencode($user->user_login), 'login');
         $subject = sprintf('[%s] Password reset', wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES));
@@ -4513,7 +4773,16 @@ class Anchor_Private_File_Manager {
         $message .= "Reset your password:\n{$reset_url}\n\n";
         $message .= "If you didn’t request this, you can ignore this email.\n";
 
-        wp_mail($user->user_email, $subject, $message);
+        return wp_mail($user->user_email, $subject, $message) ? true : new WP_Error('mail_failed', 'Could not send the email right now.');
+    }
+
+    public function ajax_ap_send_reset() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+
+        $user = wp_get_current_user();
+        $sent = $this->send_password_reset_email($user);
+        if (is_wp_error($sent)) $this->json_error($sent->get_error_message(), 400);
         $this->log_activity((int) $user->ID, 'send_password_reset', 'user', (int) $user->ID, []);
         $this->json_success(['sent' => true]);
     }

@@ -46,6 +46,18 @@ jQuery(function ($) {
         $el.prop('hidden', false);
     }
 
+    /**
+     * .fail() handler that shows the server's message. wp_send_json_error with
+     * a 4xx/5xx status rejects the jQuery deferred, so .done() alone never
+     * sees those errors and the form would fail silently.
+     */
+    function failNotice($el, fallback) {
+        return function (xhr) {
+            const msg = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message;
+            setNotice($el, 'error', msg || fallback);
+        };
+    }
+
     function resetProfileForm() {
         if (!AnchorAP.user) return;
         $profileForm.find('[name="first_name"]').val(AnchorAP.user.firstName || '');
@@ -60,7 +72,7 @@ jQuery(function ($) {
             orders: AnchorAP.i18n && AnchorAP.i18n.orders ? AnchorAP.i18n.orders : 'Orders',
             downloads: AnchorAP.i18n && AnchorAP.i18n.downloads ? AnchorAP.i18n.downloads : 'Downloads',
             'product-docs': (fm && fm.i18n && fm.i18n.productDocs) ? fm.i18n.productDocs : 'Product Docs',
-            users: (fm && fm.i18n && fm.i18n.addUsers) ? fm.i18n.addUsers : 'Add Users',
+            users: (fm && fm.i18n && fm.i18n.users) ? fm.i18n.users : 'Users',
             account: AnchorAP.i18n && AnchorAP.i18n.account ? AnchorAP.i18n.account : 'Account',
             security: AnchorAP.i18n && AnchorAP.i18n.security ? AnchorAP.i18n.security : 'Security',
         };
@@ -111,6 +123,9 @@ jQuery(function ($) {
         if (tab === 'downloads') loadDownloads();
         if (tab === 'product-docs') {
             $root.trigger('anchorfm:showProductDocs');
+        }
+        if (tab === 'users') {
+            $root.trigger('anchorfm:showUsers');
         }
         if (tab === 'account') {
             $profileNotice.prop('hidden', true);
@@ -276,7 +291,7 @@ jQuery(function ($) {
                 return;
             }
             setNotice($profileNotice, 'success', 'Saved.');
-        });
+        }).fail(failNotice($profileNotice, 'Unable to save.'));
     });
 
     $passwordForm.on('submit', function (e) {
@@ -292,7 +307,7 @@ jQuery(function ($) {
             if (res.data && res.data.loginUrl) {
                 window.setTimeout(() => { window.location.href = res.data.loginUrl; }, 900);
             }
-        });
+        }).fail(failNotice($passwordNotice, 'Unable to change password.'));
     });
 
     $root.on('click', '[data-aap-action="send-reset"]', function () {
@@ -303,7 +318,7 @@ jQuery(function ($) {
                 return;
             }
             setNotice($resetNotice, 'success', 'Reset email sent.');
-        });
+        }).fail(failNotice($resetNotice, 'Unable to send reset email.'));
     });
 
     $root.on('anchorfm:folderLoaded', function (_evt, payload) {

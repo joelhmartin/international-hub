@@ -192,6 +192,15 @@ check('header data line number', $h['rows'][0]['line'], 2);
 $b = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com\n\n   \n,Bob,Lee,bob@x.com\n");
 check('blank lines skipped', count($b['rows']), 2);
 
+// --- password column ---
+check('4-column file has empty password', $p['rows'][0]['password'], '');
+$pp = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com,Secret12345\n");
+check('5th positional column is password', $pp['rows'][0]['password'], 'Secret12345');
+$ph = Anchor_FM_User_Import::parse("email,first name,last name,password\njane@x.com,Jane,Smith,Secret12345\n");
+check('password header mapped', $ph['rows'][0]['password'], 'Secret12345');
+check('pwd header alias', Anchor_FM_User_Import::parse("email,pwd\njane@x.com,Secret12345\n")['rows'][0]['password'], 'Secret12345');
+check('header without password column', $h['rows'][0]['password'], '');
+
 // --- Anchor_FM_User_Import::normalize_email ---
 check('normalize email', Anchor_FM_User_Import::normalize_email('  Jane@X.COM '), 'jane@x.com');
 
@@ -526,6 +535,36 @@ $idx2 = new Anchor_FM_Permission_Index();
 $idx2->add_permission('folder', 5, 'role', 'centre', 'view');
 check('index: file and folder ids do not collide',
     $idx2->role_view_capabilities('file', 5, ['centre']), []);
+
+require __DIR__ . '/../includes/class-afm-user-admin.php';
+
+// --- Anchor_FM_User_Admin::validate_password ---
+check('pw: 9 chars rejected', Anchor_FM_User_Admin::validate_password('123456789')['ok'], false);
+check('pw: 10 chars ok', Anchor_FM_User_Admin::validate_password('1234567890')['ok'], true);
+check('pw: 5 multibyte chars (10 bytes) rejected', Anchor_FM_User_Admin::validate_password('ééééé')['ok'], false);
+check('pw: 10 multibyte chars ok', Anchor_FM_User_Admin::validate_password('éééééééééé')['ok'], true);
+check('pw: invalid UTF-8 rejected', Anchor_FM_User_Admin::validate_password("\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8\xf7\xf6")['ok'], false);
+check('pw: error text', Anchor_FM_User_Admin::validate_password('short')['error'], 'Password must be at least 10 characters');
+check('pw: trimmed before length', Anchor_FM_User_Admin::validate_password('  12345678  ')['ok'], false);
+check('pw: empty rejected', Anchor_FM_User_Admin::validate_password('')['ok'], false);
+
+// --- Anchor_FM_User_Admin::resolve_password ---
+check('resolve: row wins', Anchor_FM_User_Admin::resolve_password(' rowpass123 ', 'default1234'), ['source' => 'row', 'password' => 'rowpass123']);
+check('resolve: default when row blank', Anchor_FM_User_Admin::resolve_password('  ', 'default1234'), ['source' => 'default', 'password' => 'default1234']);
+check('resolve: generate when both blank', Anchor_FM_User_Admin::resolve_password('', ''), ['source' => 'generate', 'password' => '']);
+check('resolve: null inputs generate', Anchor_FM_User_Admin::resolve_password(null, null), ['source' => 'generate', 'password' => '']);
+
+// --- Anchor_FM_User_Admin::is_manageable ---
+check('manage: other subscriber ok', Anchor_FM_User_Admin::is_manageable(['subscriber'], 7, 1), true);
+check('manage: self refused', Anchor_FM_User_Admin::is_manageable(['subscriber'], 1, 1), false);
+check('manage: administrator refused', Anchor_FM_User_Admin::is_manageable(['editor', 'administrator'], 7, 1), false);
+check('manage: missing id refused', Anchor_FM_User_Admin::is_manageable(['subscriber'], 0, 1), false);
+
+// --- Anchor_FM_User_Admin::valid_role ---
+check('role: listed ok', Anchor_FM_User_Admin::valid_role('tmj_patient', ['subscriber', 'tmj_patient']), true);
+check('role: unlisted refused', Anchor_FM_User_Admin::valid_role('editor', ['subscriber']), false);
+check('role: administrator refused even if listed', Anchor_FM_User_Admin::valid_role('administrator', ['administrator']), false);
+check('role: empty refused', Anchor_FM_User_Admin::valid_role('', ['subscriber']), false);
 
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);
