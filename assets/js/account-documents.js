@@ -46,6 +46,18 @@ jQuery(function ($) {
         $el.prop('hidden', false);
     }
 
+    /**
+     * .fail() handler that shows the server's message. wp_send_json_error with
+     * a 4xx/5xx status rejects the jQuery deferred, so .done() alone never
+     * sees those errors and the form would fail silently.
+     */
+    function failNotice($el, fallback) {
+        return function (xhr) {
+            const msg = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message;
+            setNotice($el, 'error', msg || fallback);
+        };
+    }
+
     function resetProfileForm() {
         if (!AnchorAP.user) return;
         $profileForm.find('[name="first_name"]').val(AnchorAP.user.firstName || '');
@@ -279,7 +291,7 @@ jQuery(function ($) {
                 return;
             }
             setNotice($profileNotice, 'success', 'Saved.');
-        });
+        }).fail(failNotice($profileNotice, 'Unable to save.'));
     });
 
     $passwordForm.on('submit', function (e) {
@@ -295,7 +307,7 @@ jQuery(function ($) {
             if (res.data && res.data.loginUrl) {
                 window.setTimeout(() => { window.location.href = res.data.loginUrl; }, 900);
             }
-        });
+        }).fail(failNotice($passwordNotice, 'Unable to change password.'));
     });
 
     $root.on('click', '[data-aap-action="send-reset"]', function () {
@@ -306,7 +318,7 @@ jQuery(function ($) {
                 return;
             }
             setNotice($resetNotice, 'success', 'Reset email sent.');
-        });
+        }).fail(failNotice($resetNotice, 'Unable to send reset email.'));
     });
 
     $root.on('anchorfm:folderLoaded', function (_evt, payload) {
