@@ -1,8 +1,13 @@
 /*
  * Users panel (administrators only): list, search, filter and page portal
  * users; add one person; import a CSV; change role, set password, email a
- * reset link, remove. Reuses file-manager.js's modal and helpers through
- * window.AnchorFMUI rather than carrying copies.
+ * reset link, remove; create, rename and delete portal roles. Reuses
+ * file-manager.js's modal and helpers through window.AnchorFMUI rather than
+ * carrying copies.
+ *
+ * AnchorFM.roles is the page's one role list: file-manager.js's permission
+ * pickers read it live, so role changes update it in place (never reassign)
+ * and every dropdown offers the change immediately.
  */
 jQuery(function ($) {
     const $root = $('[data-afm]');
@@ -11,13 +16,60 @@ jQuery(function ($) {
     if (!$panel.length || !UI || !window.AnchorFM || !AnchorFM.isAdmin) return;
 
     const { api, esc, toast, errMessage, modal } = UI;
-    const roles = Array.isArray(AnchorFM.roles) ? AnchorFM.roles : [];
+    if (!Array.isArray(AnchorFM.roles)) AnchorFM.roles = [];
+    const roles = AnchorFM.roles;
     const roleLabel = key => (roles.find(r => r.key === key) || {}).label || key;
-    const st = { search: '', role: '', page: 1, pages: 1, loaded: false, users: [], seq: 0 };
+    const st = { search: '', role: '', page: 1, pages: 1, loaded: false, users: [], seq: 0, total: 0 };
     let searchTimer = null;
 
     function roleOptions(selected) {
         return roles.map(r => `<option value="${esc(r.key)}"${r.key === selected ? ' selected' : ''}>${esc(r.label)}</option>`).join('');
+    }
+
+    /** Role picker used by every popup, with an inline "New role" that selects what it creates. */
+    function roleField(selected) {
+        return `<div class="afm__formRow">
+            <label class="afm__label">Role</label>
+            <select class="afm__select" data-um-role>${roleOptions(selected)}</select>
+            <button type="button" class="afm__linkBtn" data-um-newrole>+ New role</button>
+            <div class="afm__newRole" data-um-newrole-row hidden>
+                <input type="text" class="afm__input" data-um-newrole-name placeholder="e.g. TMJ patient" maxlength="60">
+                <button type="button" class="afm__btn afm__btn--secondary" data-um-newrole-save>Add role</button>
+            </div>
+        </div>`;
+    }
+
+    /**
+     * Swap in the server's role list and refresh everything that shows roles:
+     * the filter, any open popup's pickers, the table's role column and the
+     * roles popup itself.
+     */
+    function applyRoles(data) {
+        if (!data || !Array.isArray(data.roles)) return;
+        roles.splice(0, roles.length, ...data.roles);
+        const keys = roles.map(r => r.key);
+
+        const $filter = $panel.find('[data-afm-users-role]');
+        const filterGone = st.role && keys.indexOf(st.role) === -1;
+        $filter.html('<option value="">All roles</option>' + roleOptions(filterGone ? '' : st.role));
+        if (filterGone) { st.role = ''; st.page = 1; load(); }
+
+        $root.find('[data-um-role]').each(function () {
+            const v = String($(this).val() || '');
+            $(this).html(roleOptions(v));
+            if (keys.indexOf(v) === -1 && roles.length) $(this).val(roles[0].key);
+        });
+        if (!filterGone && st.users.length) renderTable(st.total);
+        if (Array.isArray(data.portalRoles)) renderRolesBody(data.portalRoles);
+        $root.trigger('anchorfm:rolesChanged', [roles]);
+    }
+
+    function createRole(name) {
+        return api('anchor_fm_role_create', { name }).then(res => {
+            if (!res || !res.success) return $.Deferred().reject(null, res).promise();
+            applyRoles(res.data);
+            return res.data;
+        });
     }
 
     function genPassword() {
@@ -62,7 +114,8 @@ jQuery(function ($) {
                 st.users = res.data.users || [];
                 st.pages = res.data.pages || 1;
                 st.page = res.data.page || 1;
-                renderTable(res.data.total || 0);
+                st.total = res.data.total || 0;
+                renderTable(st.total);
             })
             .fail(xhr => { if (seq === st.seq) renderError(errMessage(xhr, null, 'Could not load users.')); });
     }
@@ -111,7 +164,7 @@ jQuery(function ($) {
             <div class="afm__formRow"><label class="afm__label">Last name</label><input type="text" class="afm__input" data-um-last></div>
             <div class="afm__formRow"><label class="afm__label">Email</label><input type="email" class="afm__input" data-um-email></div>
             <div class="afm__formRow"><label class="afm__label">Username (optional)</label><input type="text" class="afm__input" data-um-username placeholder="e.g. j.smith"></div>
-            <div class="afm__formRow"><label class="afm__label">Role</label><select class="afm__select" data-um-role>${roleOptions(AnchorFM.defaultRole || '')}</select></div>
+            ${roleField(AnchorFM.defaultRole || '')}
             ${passwordField('Password (optional)', 'At least 10 characters. Leave blank to generate one they never see.')}
             <label class="afm__check"><input type="checkbox" data-um-send checked> Email a welcome / set-password link</label>
         `, 'Add person', $b => {
@@ -140,7 +193,7 @@ jQuery(function ($) {
         modal.open('Import users from CSV', `
             <p class="afm__importHint">Columns in this order: username, first name, last name, email, password. A header row is optional; username and password are optional.</p>
             <div class="afm__formRow"><label class="afm__label">CSV file</label><input type="file" accept=".csv,text/csv,text/plain" data-um-file></div>
-            <div class="afm__formRow"><label class="afm__label">Role</label><select class="afm__select" data-um-role>${roleOptions(AnchorFM.defaultRole || '')}</select></div>
+            ${roleField(AnchorFM.defaultRole || '')}
             ${passwordField('Password for everyone without one (optional)', 'Rows with their own password keep it. If both are blank, a password is generated.')}
             <label class="afm__check"><input type="checkbox" data-um-send checked> Email new users a link to set their password</label>
             <div class="afm__importResults" data-um-results hidden></div>
@@ -187,7 +240,7 @@ jQuery(function ($) {
             ? `<div class="afm__help">Currently: ${esc(userRoles.map(roleLabel).join(', '))}. Saving replaces all of them with the role you pick.</div>`
             : '';
         modal.open(`Change role — ${u.displayName}`, `
-            <div class="afm__formRow"><label class="afm__label">Role</label><select class="afm__select" data-um-role>${roleOptions(preselect)}</select></div>
+            ${roleField(preselect)}
             ${currentLine}
             <div class="afm__help">Folder access follows role, so this changes what they can see.</div>
         `, 'Save', $b => {
@@ -195,7 +248,11 @@ jQuery(function ($) {
             api('anchor_fm_user_set_role', { user_id: u.id, role: $b.find('[data-um-role]').val() })
                 .done(res => {
                     if (!res || !res.success) { modalError($b, errMessage(null, res, 'Could not change the role.')); return; }
-                    modal.close(); toast('Role updated'); load();
+                    modal.close(); toast('Role updated');
+                    const i = st.users.findIndex(x => x.id === u.id);
+                    if (i !== -1 && res.data && res.data.user) st.users[i] = res.data.user;
+                    // A filtered list may no longer include them; otherwise redraw in place.
+                    if (st.role) load(); else renderTable(st.total);
                 })
                 .fail(xhr => modalError($b, errMessage(xhr, null, 'Could not change the role.')))
                 .always(() => modal.busy(false, 'Save'));
@@ -236,6 +293,121 @@ jQuery(function ($) {
         });
     }
 
+    // --- Roles popup ---
+    const $rolesHost = () => $root.find('[data-rm-body]');
+
+    function renderRolesBody(portalRoles) {
+        const $host = $rolesHost();
+        if (!$host.length) return;
+        const rows = portalRoles.length ? portalRoles.map(r => `
+            <div class="afm__roleRow" data-rm-key="${esc(r.key)}">
+                <div class="afm__roleName" data-rm-name>${esc(r.label)}</div>
+                <div class="afm__muted">${r.users} user${r.users === 1 ? '' : 's'}</div>
+                <div class="afm__roleActions">
+                    <button type="button" class="afm__linkBtn" data-rm-act="rename">Rename</button>
+                    <button type="button" class="afm__linkBtn afm__linkBtn--danger" data-rm-act="delete"
+                        ${r.users ? `disabled title="Move its ${r.users} user${r.users === 1 ? '' : 's'} to another role first"` : ''}>Delete</button>
+                </div>
+            </div>`).join('') : '<div class="afm__empty afm__empty--tight">No roles created here yet.</div>';
+        $host.html(`
+            <div class="afm__help">Roles group people so folders can be shared with the whole group from a folder's Permissions. New roles can log in and see the portal, nothing else.</div>
+            <div class="afm__roleList">${rows}</div>
+            <div class="afm__newRole">
+                <input type="text" class="afm__input" data-rm-new placeholder="New role name, e.g. Sleep patient" maxlength="60">
+                <button type="button" class="afm__btn afm__btn--primary" data-rm-add>Add role</button>
+            </div>
+            <div class="afm__notice afm__notice--error" data-rm-notice hidden></div>`);
+    }
+
+    function rolesError(msg) {
+        $rolesHost().find('[data-rm-notice]').text(msg).prop('hidden', false);
+    }
+
+    function openRoles() {
+        modal.open('Roles', '<div data-rm-body><div class="afm__skeleton"></div></div>', 'Done', () => modal.close());
+        api('anchor_fm_roles_list', {})
+            .done(res => {
+                if (!res || !res.success) { rolesError(errMessage(null, res, 'Could not load roles.')); return; }
+                applyRoles(res.data);
+            })
+            .fail(xhr => rolesError(errMessage(xhr, null, 'Could not load roles.')));
+    }
+
+    function roleMutation(action, data, okMsg) {
+        return api(action, data)
+            .done(res => {
+                if (!res || !res.success) { rolesError(errMessage(null, res, 'That did not work.')); return; }
+                applyRoles(res.data);
+                toast(okMsg);
+            })
+            .fail(xhr => rolesError(errMessage(xhr, null, 'That did not work.')));
+    }
+
+    $root.on('click', '[data-rm-add]', function () {
+        const $in = $rolesHost().find('[data-rm-new]');
+        const name = String($in.val() || '').trim();
+        if (!name) { $in.trigger('focus'); return; }
+        const $btn = $(this).prop('disabled', true);
+        createRole(name)
+            .done(() => toast(`Role "${name}" added`))
+            .fail((xhr, res) => rolesError(errMessage(xhr, res, 'Could not create the role.')))
+            .always(() => $btn.prop('disabled', false));
+    });
+    $root.on('keydown', '[data-rm-new], [data-rm-rename], [data-um-newrole-name]', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        e.stopPropagation();
+        const $scope = $(this).parent();
+        $scope.find('[data-rm-add], [data-rm-save], [data-um-newrole-save]').first().trigger('click');
+    });
+    $root.on('click', '[data-rm-act="rename"]', function () {
+        const $row = $(this).closest('[data-rm-key]');
+        const current = $row.find('[data-rm-name]').text();
+        $row.find('[data-rm-name]').html(`<input type="text" class="afm__input" data-rm-rename maxlength="60" value="${esc(current)}">
+            <button type="button" class="afm__btn afm__btn--secondary" data-rm-save>Save</button>`);
+        $row.find('[data-rm-rename]').trigger('focus').trigger('select');
+    });
+    $root.on('click', '[data-rm-save]', function () {
+        const $row = $(this).closest('[data-rm-key]');
+        const name = String($row.find('[data-rm-rename]').val() || '').trim();
+        if (!name) return;
+        roleMutation('anchor_fm_role_rename', { key: $row.data('rm-key'), name }, 'Role renamed');
+    });
+    $root.on('click', '[data-rm-act="delete"]', function () {
+        const $row = $(this).closest('[data-rm-key]');
+        const label = $row.find('[data-rm-name]').text();
+        const $btn = $(this);
+        if ($btn.data('rm-confirm')) {
+            roleMutation('anchor_fm_role_delete', { key: $row.data('rm-key') }, `Role "${label}" deleted`);
+            return;
+        }
+        // Second click confirms: keeps the confirmation inside this popup.
+        $btn.data('rm-confirm', true).text('Click again to delete');
+    });
+
+    // Inline "New role" inside Add person / Import / Change role.
+    $root.on('click', '[data-um-newrole]', function () {
+        const $row = $(this).siblings('[data-um-newrole-row]');
+        $row.prop('hidden', !$row.prop('hidden'));
+        $row.find('[data-um-newrole-name]').trigger('focus');
+    });
+    $root.on('click', '[data-um-newrole-save]', function () {
+        const $field = $(this).closest('.afm__formRow');
+        const $in = $field.find('[data-um-newrole-name]');
+        const name = String($in.val() || '').trim();
+        if (!name) { $in.trigger('focus'); return; }
+        const $btn = $(this).prop('disabled', true);
+        createRole(name)
+            .done(data => {
+                $field.find('[data-um-role]').val(data.created);
+                $field.find('[data-um-newrole-row]').prop('hidden', true);
+                $in.val('');
+                toast(`Role "${name}" added`);
+            })
+            .fail((xhr, res) => modalError(modal.body(), errMessage(xhr, res, 'Could not create the role.')))
+            .always(() => $btn.prop('disabled', false));
+    });
+
     // --- Wiring ---
     $panel.find('[data-afm-users-role]').html('<option value="">All roles</option>' + roleOptions(''));
 
@@ -252,6 +424,7 @@ jQuery(function ($) {
     });
     $panel.on('click', '[data-afm-action="users-add"]', openAdd);
     $panel.on('click', '[data-afm-action="users-import"]', openImport);
+    $panel.on('click', '[data-afm-action="users-roles"]', openRoles);
     $panel.on('click', '[data-um-act]', function () {
         const u = userById(Number($(this).closest('[data-um-id]').data('um-id')));
         if (!u) return;

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.15.0
+ * Version: 2.16.0
  * Author: Anchor Corps
  */
 
@@ -20,7 +20,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-index.ph
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.15.0';
+    const VERSION = '2.16.0';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -46,6 +46,8 @@ class Anchor_Private_File_Manager {
     const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
     const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
     const OPT_PORTAL_LOGO = 'anchor_fm_portal_logo';
+    /** Keys of the roles created from the Users tab — the only ones it may rename or delete. */
+    const OPT_PORTAL_ROLES = 'anchor_fm_portal_roles';
     /**
      * International ran on this hardcoded default before it became a setting.
      * Only the 2.15.0 upgrade uses it, to pin that behavior on existing installs.
@@ -110,6 +112,10 @@ class Anchor_Private_File_Manager {
         add_action('wp_ajax_anchor_fm_user_send_reset', [$this, 'ajax_user_send_reset']);
         add_action('wp_ajax_anchor_fm_user_delete', [$this, 'ajax_user_delete']);
         add_action('deleted_user', [$this, 'on_deleted_user']);
+        add_action('wp_ajax_anchor_fm_roles_list', [$this, 'ajax_roles_list']);
+        add_action('wp_ajax_anchor_fm_role_create', [$this, 'ajax_role_create']);
+        add_action('wp_ajax_anchor_fm_role_rename', [$this, 'ajax_role_rename']);
+        add_action('wp_ajax_anchor_fm_role_delete', [$this, 'ajax_role_delete']);
 
         add_action('wp_ajax_anchor_ap_orders', [$this, 'ajax_ap_orders']);
         add_action('wp_ajax_anchor_ap_order', [$this, 'ajax_ap_order']);
@@ -1042,6 +1048,10 @@ class Anchor_Private_File_Manager {
                                         <input type="search" placeholder="<?php esc_attr_e('Search name, email or username…', 'anchor-private-file-manager'); ?>" data-afm-users-search>
                                     </label>
                                     <select class="afm__select afm__usersRole" data-afm-users-role></select>
+                                    <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="users-roles">
+                                        <span class="dashicons dashicons-groups" aria-hidden="true"></span>
+                                        <?php esc_html_e('Roles', 'anchor-private-file-manager'); ?>
+                                    </button>
                                     <button type="button" class="afm__btn afm__btn--secondary" data-afm-action="users-import">
                                         <span class="dashicons dashicons-media-spreadsheet" aria-hidden="true"></span>
                                         <?php esc_html_e('Import CSV', 'anchor-private-file-manager'); ?>
@@ -4533,6 +4543,129 @@ class Anchor_Private_File_Manager {
         if ($user_id <= 0) return;
         $wpdb->delete(self::table('permissions'), ['subject_type' => 'user', 'subject_key' => (string) $user_id], ['%s', '%s']);
         $wpdb->delete(self::table('video_views'), ['user_id' => $user_id], ['%d']);
+    }
+
+    /** Portal-created role keys that still exist as WordPress roles. */
+    private function portal_role_keys() {
+        $keys = array_map('strval', (array) get_option(self::OPT_PORTAL_ROLES, []));
+        return array_values(array_filter($keys, function ($k) { return (bool) get_role($k); }));
+    }
+
+    private function role_user_count($key) {
+        $q = new WP_User_Query(['role' => $key, 'fields' => 'ID', 'number' => 1, 'count_total' => true]);
+        return (int) $q->get_total();
+    }
+
+    /**
+     * What every role-changing response returns, so the page can swap its one
+     * shared role list in place: every dropdown and permission picker then
+     * offers the change immediately, with no reload.
+     */
+    private function roles_payload() {
+        $portal = [];
+        $names = wp_roles()->get_names();
+        foreach ($this->portal_role_keys() as $key) {
+            $portal[] = [
+                'key' => $key,
+                'label' => isset($names[$key]) ? $names[$key] : $key,
+                'users' => $this->role_user_count($key),
+            ];
+        }
+        return ['roles' => $this->get_editable_roles_for_permissions(), 'portalRoles' => $portal];
+    }
+
+    /** The posted role key, if it is one the portal created; otherwise a 403/404. */
+    private function portal_role_target() {
+        $key = isset($_POST['key']) ? sanitize_key((string) $_POST['key']) : '';
+        if ($key === '' || !get_role($key)) $this->json_error('Role not found', 404);
+        if (!in_array($key, $this->portal_role_keys(), true)) $this->json_error('Only roles created here can be changed.', 403);
+        return $key;
+    }
+
+    public function ajax_roles_list() {
+        $this->require_admin_ajax();
+        $this->json_success($this->roles_payload());
+    }
+
+    public function ajax_role_create() {
+        $this->require_admin_ajax();
+        $name = Anchor_FM_User_Admin::normalize_role_name(isset($_POST['name']) ? wp_unslash((string) $_POST['name']) : '');
+        $name = sanitize_text_field($name);
+        $key = Anchor_FM_User_Admin::role_key_from_name($name);
+        if ($name === '' || $key === '') $this->json_error('Enter a role name using letters or numbers.');
+        if (Anchor_FM_User_Admin::is_reserved_role_key($key) || get_role($key)) {
+            $this->json_error('A role with that name already exists.');
+        }
+        // Subscriber-level: patients can log in and see the portal, nothing in wp-admin.
+        if (!add_role($key, $name, ['read' => true])) $this->json_error('Could not create the role.', 500);
+
+        $owned = (array) get_option(self::OPT_PORTAL_ROLES, []);
+        $owned[] = $key;
+        update_option(self::OPT_PORTAL_ROLES, array_values(array_unique(array_map('strval', $owned))), false);
+
+        $this->log_activity(get_current_user_id(), 'role_create', 'role', 0, ['key' => $key, 'name' => $name]);
+        $this->json_success(array_merge($this->roles_payload(), ['created' => $key]));
+    }
+
+    public function ajax_role_rename() {
+        $this->require_admin_ajax();
+        $key = $this->portal_role_target();
+        $name = sanitize_text_field(Anchor_FM_User_Admin::normalize_role_name(isset($_POST['name']) ? wp_unslash((string) $_POST['name']) : ''));
+        if ($name === '') $this->json_error('Enter a role name.');
+
+        // WP_Roles has no rename API; the display name lives in the roles option.
+        $wp_roles = wp_roles();
+        $wp_roles->roles[$key]['name'] = $name;
+        $wp_roles->role_names[$key] = $name;
+        if (isset($wp_roles->role_objects[$key])) $wp_roles->role_objects[$key]->name = $name;
+        update_option($wp_roles->role_key, $wp_roles->roles);
+
+        $this->log_activity(get_current_user_id(), 'role_rename', 'role', 0, ['key' => $key, 'name' => $name]);
+        $this->json_success($this->roles_payload());
+    }
+
+    private function strip_role_from_policies($key) {
+        global $wpdb;
+        $policies = self::table('permission_policies');
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, policy FROM {$policies} WHERE policy LIKE %s",
+            '%' . $wpdb->esc_like('"' . $key . '"') . '%'
+        ));
+        foreach ((array) $rows as $row) {
+            $before = Anchor_FM_Permission_Policy::normalize($row->policy);
+            $after = Anchor_FM_Permission_Policy::without_role($before, $key);
+            if ($after === $before) continue;
+            if (Anchor_FM_Permission_Policy::rule_count($after) <= 0) {
+                $wpdb->delete($policies, ['id' => (int) $row->id], ['%d']);
+            } else {
+                $wpdb->update($policies, [
+                    'policy' => wp_json_encode($after),
+                    'updated_by' => get_current_user_id(),
+                    'updated_at' => current_time('mysql'),
+                ], ['id' => (int) $row->id], ['%s', '%d', '%s'], ['%d']);
+            }
+        }
+    }
+
+    public function ajax_role_delete() {
+        $this->require_admin_ajax();
+        $key = $this->portal_role_target();
+        $check = Anchor_FM_User_Admin::can_delete_role($key, $this->portal_role_keys(), $this->role_user_count($key));
+        if (!$check['ok']) $this->json_error($check['error']);
+
+        // Drop the role's folder grants and rule conditions so re-creating the
+        // same name later doesn't silently bring old access back. Rules are
+        // rewritten before remove_role(): once the role is gone, policy
+        // normalization would silently drop its conditions instead, which can
+        // widen an "all" rule to everyone.
+        $this->strip_role_from_policies($key);
+        global $wpdb;
+        $wpdb->delete(self::table('permissions'), ['subject_type' => 'role', 'subject_key' => $key], ['%s', '%s']);
+        remove_role($key);
+        update_option(self::OPT_PORTAL_ROLES, array_values(array_diff($this->portal_role_keys(), [$key])), false);
+
+        $this->log_activity(get_current_user_id(), 'role_delete', 'role', 0, ['key' => $key]);
+        $this->json_success($this->roles_payload());
     }
 
     private function get_editable_roles_for_permissions() {
