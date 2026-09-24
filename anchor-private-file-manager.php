@@ -12,6 +12,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-watch-math.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-coverage.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-media-progress.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-import.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-user-admin.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.php';
