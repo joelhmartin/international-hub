@@ -166,6 +166,7 @@ function load() {
         throw new Error('expected one jQuery ready callback, got ' + h.ready.length);
     }
     h.ready[0](h.$);
+    h.sandbox = sandbox;
     return h;
 }
 
@@ -343,6 +344,24 @@ function boot(h, contents) {
     clickExpand(h, 7);
     check('a fetch that outlived a navigation does not seed the cache',
         h.posts.length - before, 1);
+}
+
+// 7. Review focus 5: a closed external modal must not fire on the next save.
+{
+    const h = load();
+    boot(h, null);
+    const ui = h.sandbox.window.AnchorFMUI;
+    check('AnchorFMUI exposed', typeof ui === 'object' && typeof ui.modal.open, 'function');
+
+    let fired = 0;
+    ui.modal.open('T', '<div></div>', 'Go', () => { fired++; });
+    ui.modal.close();
+
+    const primary = h.handlers.find(x => x.event === 'click' && x.selector === '[data-afm-action="modal-primary"]');
+    check('modal-primary click handler registered', !!primary, true);
+    const el = h.node('[data-afm-action="modal-primary"]');
+    primary.fn.call(el, { stopPropagation() {}, preventDefault() {}, target: el });
+    check('closed external handler does not fire', fired, 0);
 }
 
 console.log(failures === 0 ? '\nALL PASS\n' : `\n${failures} FAILURE(S)\n`);
