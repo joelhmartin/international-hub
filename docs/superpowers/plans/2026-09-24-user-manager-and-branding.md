@@ -569,7 +569,7 @@ git commit -m "feat: explicit passwords in CSV import via a shared user-creation
         require_once ABSPATH . 'wp-admin/includes/user.php';
         $id = (int) $u->ID;
         $email = $u->user_email;
-        if (!wp_delete_user($id)) $this->json_error('Could not remove the user.', 500);
+        if (!wp_delete_user($id, get_current_user_id())) $this->json_error('Could not remove the user.', 500);
         $this->log_activity(get_current_user_id(), 'user_delete', 'user', $id, ['email' => $email]);
         $this->json_success(['deleted' => true]);
     }
@@ -686,13 +686,18 @@ Replace the hardcoded `<img class="afm__brandMark" src="https://tmjtherapycentre
 - [ ] **Step 4: Migration.** In `maybe_upgrade_db`, next to `$pre_coverage`:
 
 ```php
-            // Existing installs (International) relied on the old hardcoded
-            // recipient; pin it so the new admin-email default doesn't reroute
-            // their access requests. Fresh installs never reach this: activate()
-            // stamps the current version first.
+            // International relied on the old hardcoded recipient and favicon;
+            // pin them on that host only (other sites may also have run 2.14).
+            // Fresh installs never reach this: activate() stamps the version
+            // only after schema work succeeds.
             if ($installed !== '0' && version_compare($installed, '2.15.0', '<')
-                && get_option(self::OPT_REQUEST_ACCESS_EMAIL, null) === null) {
-                update_option(self::OPT_REQUEST_ACCESS_EMAIL, self::LEGACY_REQUEST_ACCESS_EMAIL);
+                && self::is_legacy_international_host()) {
+                if (get_option(self::OPT_REQUEST_ACCESS_EMAIL, null) === null) {
+                    update_option(self::OPT_REQUEST_ACCESS_EMAIL, self::LEGACY_REQUEST_ACCESS_EMAIL);
+                }
+                if (get_option(self::OPT_PORTAL_LOGO, null) === null && get_site_icon_url(96) === '') {
+                    update_option(self::OPT_PORTAL_LOGO, self::LEGACY_PORTAL_LOGO);
+                }
             }
 ```
 

@@ -541,6 +541,9 @@ require __DIR__ . '/../includes/class-afm-user-admin.php';
 // --- Anchor_FM_User_Admin::validate_password ---
 check('pw: 9 chars rejected', Anchor_FM_User_Admin::validate_password('123456789')['ok'], false);
 check('pw: 10 chars ok', Anchor_FM_User_Admin::validate_password('1234567890')['ok'], true);
+check('pw: 5 multibyte chars (10 bytes) rejected', Anchor_FM_User_Admin::validate_password('ééééé')['ok'], false);
+check('pw: 10 multibyte chars ok', Anchor_FM_User_Admin::validate_password('éééééééééé')['ok'], true);
+check('pw: invalid UTF-8 rejected', Anchor_FM_User_Admin::validate_password("\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8\xf7\xf6")['ok'], false);
 check('pw: error text', Anchor_FM_User_Admin::validate_password('short')['error'], 'Password must be at least 10 characters');
 check('pw: trimmed before length', Anchor_FM_User_Admin::validate_password('  12345678  ')['ok'], false);
 check('pw: empty rejected', Anchor_FM_User_Admin::validate_password('')['ok'], false);

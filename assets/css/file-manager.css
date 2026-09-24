@@ -1599,7 +1599,7 @@
 .afm__usersTable .afm__table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .afm__usersTable th, .afm__usersTable td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--afm-border); vertical-align: top; }
 .afm__usersTable th { color: var(--afm-muted); font-weight: 600; }
-.afm__usersActions { white-space: nowrap; text-align: right; }
+.afm__usersTable .afm__usersActions { white-space: nowrap; text-align: right; }
 .afm__usersPager { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: var(--afm-gap); color: var(--afm-muted); }
 .afm__pwRow { display: flex; gap: 8px; }
 .afm__pwRow .afm__input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -1608,7 +1608,7 @@
   .afm__usersTable tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--afm-border); }
   .afm__usersTable td { display: flex; justify-content: space-between; gap: 12px; border: 0; padding: 4px 0; }
   .afm__usersTable td[data-label]::before { content: attr(data-label); color: var(--afm-muted); }
-  .afm__usersActions { justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
+  .afm__usersTable .afm__usersActions { justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
 }
 
 /* Classes referenced by user-manager.js that had no existing rule */

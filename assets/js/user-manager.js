@@ -13,7 +13,7 @@ jQuery(function ($) {
     const { api, esc, toast, errMessage, modal } = UI;
     const roles = Array.isArray(AnchorFM.roles) ? AnchorFM.roles : [];
     const roleLabel = key => (roles.find(r => r.key === key) || {}).label || key;
-    const st = { search: '', role: '', page: 1, pages: 1, loaded: false, users: [] };
+    const st = { search: '', role: '', page: 1, pages: 1, loaded: false, users: [], seq: 0 };
     let searchTimer = null;
 
     function roleOptions(selected) {
@@ -51,16 +51,20 @@ jQuery(function ($) {
     }
 
     function load() {
+        // Only the latest request may render: an older one landing last would
+        // otherwise show results for a search or filter that is no longer set.
+        const seq = ++st.seq;
         $panel.find('[data-afm-users-table]').html('<div class="afm__skeleton"></div>');
         api('anchor_fm_users_list', { search: st.search, role: st.role, page: st.page })
             .done(res => {
+                if (seq !== st.seq) return;
                 if (!res || !res.success) { renderError(errMessage(null, res, 'Could not load users.')); return; }
                 st.users = res.data.users || [];
                 st.pages = res.data.pages || 1;
                 st.page = res.data.page || 1;
                 renderTable(res.data.total || 0);
             })
-            .fail(xhr => renderError(errMessage(xhr, null, 'Could not load users.')));
+            .fail(xhr => { if (seq === st.seq) renderError(errMessage(xhr, null, 'Could not load users.')); });
     }
 
     function renderError(msg) {

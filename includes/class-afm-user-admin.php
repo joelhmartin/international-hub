@@ -10,7 +10,9 @@ class Anchor_FM_User_Admin {
 
     public static function validate_password($pw) {
         $pw = trim((string) $pw);
-        if (strlen($pw) < self::MIN_PASSWORD_LENGTH) {
+        // Characters, not bytes: "ééééé" is 10 bytes but only 5 characters.
+        $length = preg_match_all('/./us', $pw);
+        if ($length === false || $length < self::MIN_PASSWORD_LENGTH) {
             return ['ok' => false, 'error' => 'Password must be at least ' . self::MIN_PASSWORD_LENGTH . ' characters'];
         }
         return ['ok' => true, 'error' => ''];

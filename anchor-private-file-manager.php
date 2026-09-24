@@ -238,10 +238,11 @@ class Anchor_Private_File_Manager {
         register_setting('anchor_private_file_manager', self::OPT_REQUEST_ACCESS_EMAIL, [
             'type' => 'string',
             'sanitize_callback' => function ($v) {
-                $v = sanitize_email((string) $v);
-                return $v ?: (string) get_option('admin_email');
+                // Blank is allowed and means "use the admin email at send time",
+                // so a later admin_email change still takes effect.
+                return sanitize_email((string) $v);
             },
-            'default' => (string) get_option('admin_email'),
+            'default' => '',
         ]);
         register_setting('anchor_private_file_manager', self::OPT_PORTAL_LOGO, [
             'type' => 'string',
@@ -286,8 +287,8 @@ class Anchor_Private_File_Manager {
                     <tr>
                         <th scope="row">Request-access recipient</th>
                         <td>
-                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, get_option('admin_email'))); ?>">
-                            <p class="description">Where "Request access" messages are sent.</p>
+                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, '')); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
+                            <p class="description">Where "Request access" messages are sent. Leave blank to use the site admin email.</p>
                         </td>
                     </tr>
                 </table>
