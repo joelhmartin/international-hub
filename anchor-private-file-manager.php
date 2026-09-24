@@ -45,7 +45,12 @@ class Anchor_Private_File_Manager {
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
     const OPT_VIMEO_TOKEN = 'anchor_fm_vimeo_token';
     const OPT_REQUEST_ACCESS_EMAIL = 'anchor_fm_request_access_email';
-    const DEFAULT_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
+    const OPT_PORTAL_LOGO = 'anchor_fm_portal_logo';
+    /**
+     * International ran on this hardcoded default before it became a setting.
+     * Only the 2.15.0 upgrade uses it, to pin that behavior on existing installs.
+     */
+    const LEGACY_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
 
     private static $instance = null;
     private $portal_rendered = false;
@@ -190,8 +195,15 @@ class Anchor_Private_File_Manager {
     }
 
     private function get_request_access_email() {
-        $email = sanitize_email((string) get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL));
-        return $email ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+        $admin = (string) get_option('admin_email');
+        $email = sanitize_email((string) get_option(self::OPT_REQUEST_ACCESS_EMAIL, $admin));
+        return $email ?: $admin;
+    }
+
+    private function portal_logo_url() {
+        $url = (string) get_option(self::OPT_PORTAL_LOGO, '');
+        if ($url !== '') return $url;
+        return (string) get_site_icon_url(96);
     }
 
     public function register_settings_page() {
@@ -221,9 +233,14 @@ class Anchor_Private_File_Manager {
             'type' => 'string',
             'sanitize_callback' => function ($v) {
                 $v = sanitize_email((string) $v);
-                return $v ?: self::DEFAULT_REQUEST_ACCESS_EMAIL;
+                return $v ?: (string) get_option('admin_email');
             },
-            'default' => self::DEFAULT_REQUEST_ACCESS_EMAIL,
+            'default' => (string) get_option('admin_email'),
+        ]);
+        register_setting('anchor_private_file_manager', self::OPT_PORTAL_LOGO, [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) { return esc_url_raw(trim((string) $v)); },
+            'default' => '',
         ]);
     }
 
@@ -254,9 +271,16 @@ class Anchor_Private_File_Manager {
                         </td>
                     </tr>
                     <tr>
+                        <th scope="row">Portal logo URL</th>
+                        <td>
+                            <input type="url" class="regular-text" name="<?php echo esc_attr(self::OPT_PORTAL_LOGO); ?>" value="<?php echo esc_attr(get_option(self::OPT_PORTAL_LOGO, '')); ?>">
+                            <p class="description">Shown in the portal sidebar. Leave blank to use the site icon (Settings → General); if there is no site icon, no logo is shown.</p>
+                        </td>
+                    </tr>
+                    <tr>
                         <th scope="row">Request-access recipient</th>
                         <td>
-                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, self::DEFAULT_REQUEST_ACCESS_EMAIL)); ?>">
+                            <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPT_REQUEST_ACCESS_EMAIL); ?>" value="<?php echo esc_attr(get_option(self::OPT_REQUEST_ACCESS_EMAIL, get_option('admin_email'))); ?>">
                             <p class="description">Where "Request access" messages are sent.</p>
                         </td>
                     </tr>
@@ -660,6 +684,15 @@ class Anchor_Private_File_Manager {
             // before the option is bumped, and applied only once.
             $pre_coverage = version_compare($installed, '2.12.0', '<');
 
+            // Existing installs (International) relied on the old hardcoded
+            // recipient; pin it so the new admin-email default doesn't reroute
+            // their access requests. Fresh installs never reach this: activate()
+            // stamps the current version first.
+            if ($installed !== '0' && version_compare($installed, '2.15.0', '<')
+                && get_option(self::OPT_REQUEST_ACCESS_EMAIL, null) === null) {
+                update_option(self::OPT_REQUEST_ACCESS_EMAIL, self::LEGACY_REQUEST_ACCESS_EMAIL);
+            }
+
             self::ensure_links_table();
             $policies_ok = self::ensure_permission_policies_table();
             $views_ok = self::ensure_videos_table();
@@ -811,7 +844,9 @@ class Anchor_Private_File_Manager {
             <div class="afm__frame">
                 <aside class="afm__sidebar" aria-label="<?php esc_attr_e('Account navigation and folders', 'anchor-private-file-manager'); ?>">
                     <div class="afm__brand">
-                        <img class="afm__brandMark" src="https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png" aria-hidden="true"></img>
+                        <?php $logo = $this->portal_logo_url(); if ($logo !== '') : ?>
+                        <img class="afm__brandMark" src="<?php echo esc_url($logo); ?>" alt="" aria-hidden="true">
+                        <?php endif; ?>
                         <div class="afm__brandText">
                             <div class="afm__brandTitle"><?php esc_html_e('My Account', 'anchor-private-file-manager'); ?></div>
                             <div class="afm__brandSub"><?php echo esc_html($user->display_name); ?></div>
