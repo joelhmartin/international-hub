@@ -4624,18 +4624,45 @@ class Anchor_Private_File_Manager {
         $this->json_success($this->roles_payload());
     }
 
+    private function strip_role_from_policies($key) {
+        global $wpdb;
+        $policies = self::table('permission_policies');
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, policy FROM {$policies} WHERE policy LIKE %s",
+            '%' . $wpdb->esc_like('"' . $key . '"') . '%'
+        ));
+        foreach ((array) $rows as $row) {
+            $before = Anchor_FM_Permission_Policy::normalize($row->policy);
+            $after = Anchor_FM_Permission_Policy::without_role($before, $key);
+            if ($after === $before) continue;
+            if (Anchor_FM_Permission_Policy::rule_count($after) <= 0) {
+                $wpdb->delete($policies, ['id' => (int) $row->id], ['%d']);
+            } else {
+                $wpdb->update($policies, [
+                    'policy' => wp_json_encode($after),
+                    'updated_by' => get_current_user_id(),
+                    'updated_at' => current_time('mysql'),
+                ], ['id' => (int) $row->id], ['%s', '%d', '%s'], ['%d']);
+            }
+        }
+    }
+
     public function ajax_role_delete() {
         $this->require_admin_ajax();
         $key = $this->portal_role_target();
         $check = Anchor_FM_User_Admin::can_delete_role($key, $this->portal_role_keys(), $this->role_user_count($key));
         if (!$check['ok']) $this->json_error($check['error']);
 
-        remove_role($key);
-        update_option(self::OPT_PORTAL_ROLES, array_values(array_diff($this->portal_role_keys(), [$key])), false);
-        // Drop the role's folder grants so re-creating the same name later
-        // doesn't silently bring old access back.
+        // Drop the role's folder grants and rule conditions so re-creating the
+        // same name later doesn't silently bring old access back. Rules are
+        // rewritten before remove_role(): once the role is gone, policy
+        // normalization would silently drop its conditions instead, which can
+        // widen an "all" rule to everyone.
+        $this->strip_role_from_policies($key);
         global $wpdb;
         $wpdb->delete(self::table('permissions'), ['subject_type' => 'role', 'subject_key' => $key], ['%s', '%s']);
+        remove_role($key);
+        update_option(self::OPT_PORTAL_ROLES, array_values(array_diff($this->portal_role_keys(), [$key])), false);
 
         $this->log_activity(get_current_user_id(), 'role_delete', 'role', 0, ['key' => $key]);
         $this->json_success($this->roles_payload());

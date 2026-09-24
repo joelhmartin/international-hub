@@ -74,6 +74,40 @@ class Anchor_FM_Permission_Policy {
         return in_array(true, $matches, true);
     }
 
+    /**
+     * The policy after $role stops existing, treating each condition on it as
+     * always false and simplifying from there. Simply deleting the condition
+     * would be wrong: in an "all" rule like (role AND date window) it would
+     * leave the date alone and grant everyone during that window.
+     */
+    public static function without_role($policy, $role) {
+        $policy = self::normalize($policy);
+        $role = self::sanitize_key($role);
+        $rules = [];
+        foreach ($policy['rules'] as $rule) {
+            $kept = [];
+            $had_role = false;
+            foreach ($rule['conditions'] as $condition) {
+                if ($condition['type'] === 'role' && $condition['role'] === $role) {
+                    $had_role = true;
+                } else {
+                    $kept[] = $condition;
+                }
+            }
+            // all: one false condition makes the rule false. any: false drops out.
+            $rule_false = ($had_role && $rule['operator'] === 'all') || !$kept;
+            if ($rule_false) {
+                if ($policy['operator'] === 'all') {
+                    // One false rule makes the whole policy false: grant nobody.
+                    return ['operator' => $policy['operator'], 'rules' => []];
+                }
+                continue;
+            }
+            $rules[] = ['operator' => $rule['operator'], 'conditions' => $kept];
+        }
+        return ['operator' => $policy['operator'], 'rules' => $rules];
+    }
+
     public static function rule_count($policy) {
         $policy = self::normalize($policy);
         return count($policy['rules']);

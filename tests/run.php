@@ -441,6 +441,38 @@ check('permission policy top-level all passes',
 check('permission policy top-level all fails one rule',
     Anchor_FM_Permission_Policy::evaluate($all_policy, ['userId' => 8, 'roles' => ['member']], '2026-08-15'), false);
 
+// --- Anchor_FM_Permission_Policy::without_role (role deleted = condition always false) ---
+$role_and_date = ['operator' => 'any', 'rules' => [
+    ['operator' => 'all', 'conditions' => [['type' => 'role', 'role' => 'gone'], ['type' => 'date', 'start' => '2026-01-01', 'end' => '2026-12-31']]],
+    ['operator' => 'all', 'conditions' => [['type' => 'user', 'userId' => '7']]],
+]];
+$stripped = Anchor_FM_Permission_Policy::without_role($role_and_date, 'gone');
+check('without_role: an all-rule needing the role is dropped whole (never widens to the date alone)',
+    $stripped['rules'], [['operator' => 'all', 'conditions' => [['type' => 'user', 'userId' => '7']]]]);
+check('without_role: nobody else gains access in the date window',
+    Anchor_FM_Permission_Policy::evaluate($stripped, ['userId' => 8, 'roles' => []], '2026-06-01'), false);
+
+$role_or_user = ['operator' => 'any', 'rules' => [
+    ['operator' => 'any', 'conditions' => [['type' => 'role', 'role' => 'gone'], ['type' => 'user', 'userId' => '7']]],
+]];
+check('without_role: an any-rule just loses the condition',
+    Anchor_FM_Permission_Policy::without_role($role_or_user, 'gone')['rules'],
+    [['operator' => 'any', 'conditions' => [['type' => 'user', 'userId' => '7']]]]);
+
+$only_role = ['operator' => 'any', 'rules' => [['operator' => 'any', 'conditions' => [['type' => 'role', 'role' => 'gone']]]]];
+check('without_role: a rule left with no conditions is dropped',
+    Anchor_FM_Permission_Policy::without_role($only_role, 'gone')['rules'], []);
+
+$all_top = ['operator' => 'all', 'rules' => [
+    ['operator' => 'all', 'conditions' => [['type' => 'role', 'role' => 'gone']]],
+    ['operator' => 'all', 'conditions' => [['type' => 'date', 'start' => '2026-01-01']]],
+]];
+check('without_role: top-level all with a now-false rule matches nobody (empty policy)',
+    Anchor_FM_Permission_Policy::without_role($all_top, 'gone')['rules'], []);
+
+check('without_role: other roles untouched',
+    Anchor_FM_Permission_Policy::without_role($policy, 'gone'), Anchor_FM_Permission_Policy::normalize($policy));
+
 $any_rule_policy = [
     'operator' => 'any',
     'rules' => [
