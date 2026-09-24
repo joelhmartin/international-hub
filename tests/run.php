@@ -192,6 +192,15 @@ check('header data line number', $h['rows'][0]['line'], 2);
 $b = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com\n\n   \n,Bob,Lee,bob@x.com\n");
 check('blank lines skipped', count($b['rows']), 2);
 
+// --- password column ---
+check('4-column file has empty password', $p['rows'][0]['password'], '');
+$pp = Anchor_FM_User_Import::parse("jsmith,Jane,Smith,jane@x.com,Secret12345\n");
+check('5th positional column is password', $pp['rows'][0]['password'], 'Secret12345');
+$ph = Anchor_FM_User_Import::parse("email,first name,last name,password\njane@x.com,Jane,Smith,Secret12345\n");
+check('password header mapped', $ph['rows'][0]['password'], 'Secret12345');
+check('pwd header alias', Anchor_FM_User_Import::parse("email,pwd\njane@x.com,Secret12345\n")['rows'][0]['password'], 'Secret12345');
+check('header without password column', $h['rows'][0]['password'], '');
+
 // --- Anchor_FM_User_Import::normalize_email ---
 check('normalize email', Anchor_FM_User_Import::normalize_email('  Jane@X.COM '), 'jane@x.com');
 

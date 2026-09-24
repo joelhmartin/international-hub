@@ -1,7 +1,8 @@
 <?php
 /**
- * Pure (WordPress-free) helpers for bulk user import: CSV parsing,
- * username derivation, and row validation. No WP functions here so the
+ * Pure (WordPress-free) helpers for bulk user import: CSV parsing
+ * (username, first, last, email, optional password), username
+ * derivation, and row validation. No WP functions here so the
  * plain-PHP test runner (tests/run.php) can exercise it.
  */
 class Anchor_FM_User_Import {
@@ -66,6 +67,10 @@ class Anchor_FM_User_Import {
             case 'email address':
             case 'e mail':
                 return 'email';
+            case 'password':
+            case 'pass':
+            case 'pwd':
+                return 'password';
             default:
                 return '';
         }
@@ -89,7 +94,7 @@ class Anchor_FM_User_Import {
      */
     public static function parse($raw) {
         $lines = preg_split('/\r\n|\r|\n/', (string) $raw);
-        $default_cols = ['username', 'first_name', 'last_name', 'email'];
+        $default_cols = ['username', 'first_name', 'last_name', 'email', 'password'];
 
         // Find the first non-blank line to test for a header.
         $header_detected = false;
@@ -114,7 +119,7 @@ class Anchor_FM_User_Import {
             if (trim($line) === '') { continue; }
             if ($header_detected && $i === $first_idx) { continue; } // skip header line
             $cells = str_getcsv($line, ',', '"', '');
-            $row = ['line' => $i + 1, 'username' => '', 'first_name' => '', 'last_name' => '', 'email' => ''];
+            $row = ['line' => $i + 1, 'username' => '', 'first_name' => '', 'last_name' => '', 'email' => '', 'password' => ''];
             foreach ($cells as $idx => $val) {
                 $key = isset($col_map[$idx]) ? $col_map[$idx] : '';
                 if ($key !== '' && isset($row[$key])) {
