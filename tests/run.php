@@ -566,5 +566,28 @@ check('role: unlisted refused', Anchor_FM_User_Admin::valid_role('editor', ['sub
 check('role: administrator refused even if listed', Anchor_FM_User_Admin::valid_role('administrator', ['administrator']), false);
 check('role: empty refused', Anchor_FM_User_Admin::valid_role('', ['subscriber']), false);
 
+// --- Anchor_FM_User_Admin role naming ---
+check('role name: trims and collapses spaces', Anchor_FM_User_Admin::normalize_role_name("  TMJ   patient \n"), 'TMJ patient');
+check('role name: capped at 60 chars', strlen(Anchor_FM_User_Admin::normalize_role_name(str_repeat('a', 80))), 60);
+check('role key: from name', Anchor_FM_User_Admin::role_key_from_name('TMJ Patient'), 'tmj_patient');
+check('role key: punctuation collapses', Anchor_FM_User_Admin::role_key_from_name('Sleep / Apnea -- Active!'), 'sleep_apnea_active');
+check('role key: accents dropped, not fatal', Anchor_FM_User_Admin::role_key_from_name('Crânio'), 'cr_nio');
+check('role key: nothing usable is empty', Anchor_FM_User_Admin::role_key_from_name('!!!'), '');
+check('role key: capped at 40 chars', strlen(Anchor_FM_User_Admin::role_key_from_name(str_repeat('ab ', 30))) <= 40, true);
+check('role key: no trailing underscore after cap', substr(Anchor_FM_User_Admin::role_key_from_name(str_repeat('abcdefghi ', 5)), -1) !== '_', true);
+
+// --- Anchor_FM_User_Admin::is_reserved_role_key ---
+check('reserved: administrator', Anchor_FM_User_Admin::is_reserved_role_key('administrator'), true);
+check('reserved: subscriber', Anchor_FM_User_Admin::is_reserved_role_key('subscriber'), true);
+check('reserved: woo customer', Anchor_FM_User_Admin::is_reserved_role_key('customer'), true);
+check('reserved: empty', Anchor_FM_User_Admin::is_reserved_role_key(''), true);
+check('reserved: custom ok', Anchor_FM_User_Admin::is_reserved_role_key('tmj_patient'), false);
+
+// --- Anchor_FM_User_Admin::can_delete_role ---
+check('delete role: owned and empty ok', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 0), ['ok' => true, 'error' => '']);
+check('delete role: not owned refused', Anchor_FM_User_Admin::can_delete_role('editor', ['tmj_patient'], 0)['ok'], false);
+check('delete role: in use refused', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 3), ['ok' => false, 'error' => '3 users still have this role. Move them to another role first.']);
+check('delete role: one user wording', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 1)['error'], '1 user still has this role. Move them to another role first.');
+
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);

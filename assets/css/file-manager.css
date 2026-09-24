@@ -1626,3 +1626,19 @@
 .afm__linkBtn--danger { color: var(--afm-danger); }
 .afm__notice--error { border-color: var(--afm-danger); color: var(--afm-danger); }
 .afm__usersTable .afm__skeleton { display: block; height: 96px; }
+
+/* Roles popup + inline "New role" */
+.afm__roleList { display: flex; flex-direction: column; margin: 10px 0 14px; border-top: 1px solid var(--afm-border); }
+.afm__roleRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--afm-border); }
+.afm__roleName { font-weight: 600; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.afm__roleName .afm__input { flex: 1; }
+.afm__roleActions { display: flex; gap: 8px; white-space: nowrap; }
+.afm__roleActions .afm__linkBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.afm__newRole { display: flex; gap: 8px; margin-top: 8px; }
+.afm__newRole .afm__input { flex: 1; }
+.afm__newRole[hidden] { display: none; }
+[data-um-newrole] { margin-top: 6px; }
+@media (max-width: 720px) {
+  .afm__roleRow { grid-template-columns: minmax(0, 1fr) auto; }
+  .afm__roleActions { grid-column: 1 / -1; }
+}

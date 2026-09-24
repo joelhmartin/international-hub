@@ -24,3 +24,12 @@ Run on a staging copy with the plugin updated from 2.14.x, logged in as an admin
 - [ ] Deleting a user in wp-admin also clears those rows.
 - [ ] Open "Add person", switch to the Account tab, return to Documents, open a folder's Permissions and Save → permissions save normally (no stray user-manager handler).
 - [ ] As a non-admin: no Users tab; POSTing anchor_fm_users_list returns 403.
+
+## Roles (2.16.0)
+- [ ] Users → Roles → add "TMJ patient": it appears in the list with 0 users, and — without reloading — in the Users role filter, Add person, Import CSV, Change role, and a folder's Permissions popup (role checkboxes and rule role picker).
+- [ ] In Add person, "+ New role" creates a role and selects it; saving assigns it.
+- [ ] Rename a role: the new name shows in the table's Role column and all pickers immediately; users keep the role and folder access.
+- [ ] Delete is disabled while users hold the role; after moving them, delete works, the role disappears from every picker, and its rows are gone from wp_anchor_fm_permissions (subject_type='role').
+- [ ] Creating "Subscriber" / "Administrator" / a duplicate name is refused with "A role with that name already exists."
+- [ ] Core and WooCommerce roles never appear in the Roles popup; International's popup starts empty.
+- [ ] A user given a portal role can log in and see only the folders shared with that role, and cannot reach wp-admin screens beyond their profile.
