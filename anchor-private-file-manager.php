@@ -4164,6 +4164,62 @@ class Anchor_Private_File_Manager {
         $this->json_success(['users' => $out]);
     }
 
+    /**
+     * One user through the same pipeline whether they came from a CSV row or
+     * the "Add person" form: sanitize, validate, de-duplicate, derive a unique
+     * username, resolve the password, insert, optionally notify.
+     */
+    private function create_portal_user(array $row, $role, $default_password, $send_email, array &$batch_usernames, array &$seen_emails) {
+        $row = array_merge(['username' => '', 'first_name' => '', 'last_name' => '', 'email' => '', 'password' => ''], $row);
+        $row['first_name'] = sanitize_text_field($row['first_name']);
+        $row['last_name']  = sanitize_text_field($row['last_name']);
+        $row['email']      = Anchor_FM_User_Import::normalize_email($row['email']);
+        $row['username']   = Anchor_FM_User_Import::sanitize_username($row['username']);
+        $out = ['status' => 'error', 'message' => '', 'username' => $row['username'], 'email' => $row['email'], 'user_id' => 0];
+
+        $v = Anchor_FM_User_Import::validate($row);
+        if (!$v['ok']) { $out['message'] = $v['error']; return $out; }
+
+        $pw = Anchor_FM_User_Admin::resolve_password($row['password'], $default_password);
+        if ($pw['source'] === 'row') {
+            $pv = Anchor_FM_User_Admin::validate_password($pw['password']);
+            if (!$pv['ok']) { $out['message'] = $pv['error']; return $out; }
+        }
+        $password = $pw['source'] === 'generate' ? wp_generate_password(16, true, false) : $pw['password'];
+
+        if (isset($seen_emails[$row['email']]) || email_exists($row['email'])) {
+            $out['status'] = 'skipped';
+            $out['message'] = 'Email already exists';
+            return $out;
+        }
+
+        $base = $row['username'] !== '' ? $row['username'] : Anchor_FM_User_Import::derive_username($row['first_name'], $row['last_name']);
+        $username = Anchor_FM_User_Import::make_unique($base, function ($name) use ($batch_usernames) {
+            return isset($batch_usernames[$name]) || username_exists($name);
+        });
+        $out['username'] = $username;
+
+        $user_id = wp_insert_user([
+            'user_login'   => $username,
+            'user_email'   => $row['email'],
+            'user_pass'    => $password,
+            'first_name'   => $row['first_name'],
+            'last_name'    => $row['last_name'],
+            'display_name' => trim($row['first_name'] . ' ' . $row['last_name']),
+            'role'         => $role,
+        ]);
+        if (is_wp_error($user_id)) { $out['message'] = $user_id->get_error_message(); return $out; }
+
+        $batch_usernames[$username] = true;
+        $seen_emails[$row['email']] = true;
+        if ($send_email) {
+            wp_new_user_notification($user_id, null, 'user');
+        }
+        $out['status'] = 'created';
+        $out['user_id'] = (int) $user_id;
+        return $out;
+    }
+
     public function ajax_bulk_import_users() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -4171,11 +4227,17 @@ class Anchor_Private_File_Manager {
 
         // Role (one for the whole batch; administrator not allowed).
         $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
-        $valid_roles = array_column($this->get_editable_roles_for_permissions(), 'key');
-        if ($role === '' || !in_array($role, $valid_roles, true)) {
+        if (!Anchor_FM_User_Admin::valid_role($role, array_column($this->get_editable_roles_for_permissions(), 'key'))) {
             $this->json_error('Please choose a valid role.');
         }
         $send_email = !empty($_POST['send_email']) && $_POST['send_email'] !== '0';
+
+        // A bad batch default would fail every row the same way; refuse up front.
+        $default_password = isset($_POST['default_password']) ? trim((string) wp_unslash($_POST['default_password'])) : '';
+        if ($default_password !== '') {
+            $dv = Anchor_FM_User_Admin::validate_password($default_password);
+            if (!$dv['ok']) $this->json_error($dv['error']);
+        }
 
         // Uploaded CSV.
         if (empty($_FILES['csv']) || !isset($_FILES['csv']['tmp_name']) || $_FILES['csv']['error'] !== UPLOAD_ERR_OK) {
@@ -4201,58 +4263,11 @@ class Anchor_Private_File_Manager {
         $batch_usernames = [];
 
         foreach ($rows as $row) {
-            $line = (int) $row['line'];
-            $row['first_name'] = sanitize_text_field($row['first_name']);
-            $row['last_name']  = sanitize_text_field($row['last_name']);
-            $row['email']      = Anchor_FM_User_Import::normalize_email($row['email']);
-            $row['username']   = Anchor_FM_User_Import::sanitize_username($row['username']);
-
-            $v = Anchor_FM_User_Import::validate($row);
-            if (!$v['ok']) {
-                $errors++;
-                $report[] = ['line' => $line, 'username' => $row['username'], 'email' => $row['email'], 'status' => 'error', 'message' => $v['error']];
-                continue;
-            }
-
-            // Duplicate email: existing WP user or repeated within this CSV.
-            if (isset($seen_emails[$row['email']]) || email_exists($row['email'])) {
-                $skipped++;
-                $report[] = ['line' => $line, 'username' => $row['username'], 'email' => $row['email'], 'status' => 'skipped', 'message' => 'Email already exists'];
-                continue;
-            }
-
-            // Username: supplied or derived; made unique vs WP + this batch.
-            $base = $row['username'] !== '' ? $row['username'] : Anchor_FM_User_Import::derive_username($row['first_name'], $row['last_name']);
-            $username = Anchor_FM_User_Import::make_unique($base, function ($name) use ($batch_usernames) {
-                return isset($batch_usernames[$name]) || username_exists($name);
-            });
-
-            $password = wp_generate_password(16, true, false);
-            $user_id = wp_insert_user([
-                'user_login'   => $username,
-                'user_email'   => $row['email'],
-                'user_pass'    => $password,
-                'first_name'   => $row['first_name'],
-                'last_name'    => $row['last_name'],
-                'display_name' => trim($row['first_name'] . ' ' . $row['last_name']),
-                'role'         => $role,
-            ]);
-
-            if (is_wp_error($user_id)) {
-                $errors++;
-                $report[] = ['line' => $line, 'username' => $username, 'email' => $row['email'], 'status' => 'error', 'message' => $user_id->get_error_message()];
-                continue;
-            }
-
-            $batch_usernames[$username] = true;
-            $seen_emails[$row['email']] = true;
-            $created++;
-
-            if ($send_email) {
-                wp_new_user_notification($user_id, null, 'user');
-            }
-
-            $report[] = ['line' => $line, 'username' => $username, 'email' => $row['email'], 'status' => 'created', 'message' => ''];
+            $r = $this->create_portal_user($row, $role, $default_password, $send_email, $batch_usernames, $seen_emails);
+            if ($r['status'] === 'created') $created++;
+            elseif ($r['status'] === 'skipped') $skipped++;
+            else $errors++;
+            $report[] = ['line' => (int) $row['line'], 'username' => $r['username'], 'email' => $r['email'], 'status' => $r['status'], 'message' => $r['message']];
         }
 
         $this->log_activity(get_current_user_id(), 'bulk_import', 'user', 0, [
@@ -4261,6 +4276,7 @@ class Anchor_Private_File_Manager {
             'errors'  => $errors,
             'role'    => $role,
             'emailed' => $send_email,
+            'default_password' => $default_password !== '',
         ]);
 
         $this->json_success([
@@ -4484,8 +4500,9 @@ class Anchor_Private_File_Manager {
         $user_id = get_current_user_id();
         $new = isset($_POST['new_password']) ? (string) $_POST['new_password'] : '';
         $new = trim($new);
-        if (strlen($new) < 10) {
-            $this->json_error('Password must be at least 10 characters', 400);
+        $pv = Anchor_FM_User_Admin::validate_password($new);
+        if (!$pv['ok']) {
+            $this->json_error($pv['error'], 400);
         }
 
         $user = get_user_by('id', $user_id);
@@ -4496,17 +4513,11 @@ class Anchor_Private_File_Manager {
         $this->json_success(['saved' => true, 'requiresReauth' => true, 'loginUrl' => wp_login_url()]);
     }
 
-    public function ajax_ap_send_reset() {
-        $this->require_nonce();
-        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
-
-        $user = wp_get_current_user();
-        if (!$user || empty($user->user_email)) $this->json_error('No email on account', 400);
-
+    /** The password-reset email the Security tab and the Users manager both send. */
+    private function send_password_reset_email(WP_User $user) {
+        if (empty($user->user_email)) return new WP_Error('no_email', 'No email on account');
         $key = get_password_reset_key($user);
-        if (is_wp_error($key)) {
-            $this->json_error($key->get_error_message(), 400);
-        }
+        if (is_wp_error($key)) return $key;
 
         $reset_url = network_site_url('wp-login.php?action=rp&key=' . rawurlencode($key) . '&login=' . rawurlencode($user->user_login), 'login');
         $subject = sprintf('[%s] Password reset', wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES));
@@ -4514,7 +4525,16 @@ class Anchor_Private_File_Manager {
         $message .= "Reset your password:\n{$reset_url}\n\n";
         $message .= "If you didn’t request this, you can ignore this email.\n";
 
-        wp_mail($user->user_email, $subject, $message);
+        return wp_mail($user->user_email, $subject, $message) ? true : new WP_Error('mail_failed', 'Could not send the email right now.');
+    }
+
+    public function ajax_ap_send_reset() {
+        $this->require_nonce();
+        if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
+
+        $user = wp_get_current_user();
+        $sent = $this->send_password_reset_email($user);
+        if (is_wp_error($sent)) $this->json_error($sent->get_error_message(), 400);
         $this->log_activity((int) $user->ID, 'send_password_reset', 'user', (int) $user->ID, []);
         $this->json_success(['sent' => true]);
     }
