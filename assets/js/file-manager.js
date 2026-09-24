@@ -2591,6 +2591,12 @@ jQuery(function ($) {
 
     $root.on('keydown', function (e) {
         if ($(e.target).is('input, textarea, [contenteditable]')) return;
+        // state.tab is initialized to 'files' but never updated when another
+        // panel (Users, Account, etc.) or the modal takes focus, so it can't
+        // gate this handler. Guard on the actual DOM location instead: Enter
+        // on a button inside the modal or the Users panel must not fall
+        // through to "open the active/first files-grid row".
+        if ($(e.target).closest('[data-afm-modal], [data-apfm-panel="users"]').length) return;
         const $rows = $grid.find('.afm__row');
         if (!$rows.length) return;
         let idx = $rows.index($grid.find('.afm__row.is-active'));

@@ -51,6 +51,12 @@ class Anchor_Private_File_Manager {
      * Only the 2.15.0 upgrade uses it, to pin that behavior on existing installs.
      */
     const LEGACY_REQUEST_ACCESS_EMAIL = 'tiffany@tmjtherapycentre.com';
+    /**
+     * International ran on this hardcoded favicon before the logo became a
+     * setting. Only the 2.15.0 upgrade uses it, to pin that behavior on
+     * existing installs.
+     */
+    const LEGACY_PORTAL_LOGO = 'https://tmjtherapycentre.com/wp-content/uploads/2023/02/TMJ_INT_Favicon_96x96.png';
 
     private static $instance = null;
     private $portal_rendered = false;
@@ -677,6 +683,18 @@ class Anchor_Private_File_Manager {
         return $result !== false;
     }
 
+    /**
+     * True only for International's own host (production or a staging copy
+     * that still resolves under its domain). Gates the 2.15.0 pin below so it
+     * touches nobody else's site, even other installs that ran pre-2.15
+     * releases of this plugin.
+     */
+    private static function is_legacy_international_host() {
+        $host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
+        $suffix = '.tmjtherapycentre.com';
+        return $host === 'tmjtherapycentre.com' || substr($host, -strlen($suffix)) === $suffix;
+    }
+
     private function maybe_upgrade_db() {
         $installed = (string) get_option(self::OPT_DB_VERSION, '0');
         if (version_compare($installed, self::VERSION, '<')) {
@@ -684,13 +702,27 @@ class Anchor_Private_File_Manager {
             // before the option is bumped, and applied only once.
             $pre_coverage = version_compare($installed, '2.12.0', '<');
 
-            // Existing installs (International) relied on the old hardcoded
-            // recipient; pin it so the new admin-email default doesn't reroute
-            // their access requests. Fresh installs never reach this: activate()
-            // stamps the current version first.
+            // International (and only International, identified by host) ran
+            // on hardcoded pre-2.15 defaults for the access-request recipient
+            // and the sidebar logo. This pins both to their old values so the
+            // 2.15.0 upgrade doesn't silently reroute requests to the site
+            // admin or swap the logo out from under them. It's host-gated
+            // rather than "any install below 2.15.0" because other sites may
+            // also have run 2.14 or earlier and must NOT inherit
+            // International's hardcoded values — only get the new
+            // admin-email / site-icon defaults introduced in 2.15.0.
+            // Fresh installs never reach this at all: activate() stamps the
+            // current version only after schema work succeeds, so $installed
+            // is '0' there (and stays '0', retried on the next load, if a
+            // fresh activation's schema work fails).
             if ($installed !== '0' && version_compare($installed, '2.15.0', '<')
-                && get_option(self::OPT_REQUEST_ACCESS_EMAIL, null) === null) {
-                update_option(self::OPT_REQUEST_ACCESS_EMAIL, self::LEGACY_REQUEST_ACCESS_EMAIL);
+                && self::is_legacy_international_host()) {
+                if (get_option(self::OPT_REQUEST_ACCESS_EMAIL, null) === null) {
+                    update_option(self::OPT_REQUEST_ACCESS_EMAIL, self::LEGACY_REQUEST_ACCESS_EMAIL);
+                }
+                if (get_option(self::OPT_PORTAL_LOGO, null) === null && get_site_icon_url(96) === '') {
+                    update_option(self::OPT_PORTAL_LOGO, self::LEGACY_PORTAL_LOGO);
+                }
             }
 
             self::ensure_links_table();
@@ -4386,7 +4418,7 @@ class Anchor_Private_File_Manager {
 
     public function ajax_users_list() {
         $this->require_admin_ajax();
-        $search = isset($_POST['search']) ? trim(sanitize_text_field((string) $_POST['search'])) : '';
+        $search = isset($_POST['search']) ? trim(sanitize_text_field(wp_unslash((string) $_POST['search']))) : '';
         $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
         $page = max(1, isset($_POST['page']) ? (int) $_POST['page'] : 1);
         $per_page = 25;
@@ -4484,7 +4516,7 @@ class Anchor_Private_File_Manager {
         require_once ABSPATH . 'wp-admin/includes/user.php';
         $id = (int) $u->ID;
         $email = $u->user_email;
-        if (!wp_delete_user($id)) $this->json_error('Could not remove the user.', 500);
+        if (!wp_delete_user($id, get_current_user_id())) $this->json_error('Could not remove the user.', 500);
         $this->log_activity(get_current_user_id(), 'user_delete', 'user', $id, ['email' => $email]);
         $this->json_success(['deleted' => true]);
     }

@@ -1509,9 +1509,7 @@
 .afm__sectionTitle { font-weight: 700; font-size: 13px; margin-bottom: 8px; }
 
 /* --- Bulk user import --- */
-.afm__userImport { max-width: 760px; }
 .afm__importHint { margin: 0 0 16px; opacity: 0.8; font-size: 13px; line-height: 1.5; }
-.afm__importFile { display: block; }
 .afm__check { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
 .afm__formActions { margin-top: 16px; }
 .afm__importResults { margin-top: 20px; }

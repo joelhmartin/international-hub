@@ -54,11 +54,17 @@ The hardcoded International favicon URL is deleted.
 - `DEFAULT_REQUEST_ACCESS_EMAIL` constant is removed. The default becomes
   `get_option('admin_email')`, used both by `get_request_access_email()` and the
   `register_setting` sanitize fallback.
-- `maybe_upgrade_db()` gains a one-time step, gated like `$pre_coverage`: when the
-  installed DB version is not `'0'` and is `< 2.15.0`, and the option has never been
-  stored (`get_option(OPT, null) === null`), store `tiffany@tmjtherapycentre.com`. That
-  preserves International's current behavior. Fresh installs go through `activate()`,
-  which sets the DB version to 2.15.0 directly, so the step never fires there.
+- `maybe_upgrade_db()` gains a one-time step, gated like `$pre_coverage`, but also
+  host-gated via `is_legacy_international_host()` (host equals `tmjtherapycentre.com`
+  or ends with `.tmjtherapycentre.com`): when the installed DB version is not `'0'`,
+  is `< 2.15.0`, and the host matches, store `tiffany@tmjtherapycentre.com` if the
+  option has never been stored, and store the legacy portal-logo URL if the logo
+  option has never been stored AND `get_site_icon_url(96)` is empty. The host gate
+  matters because other sites may also have run pre-2.15 releases of this plugin —
+  without it they would inherit International's hardcoded values instead of the new
+  admin-email / site-icon defaults. Fresh installs go through `activate()`, which
+  stamps the DB version to 2.15.0 only after schema work succeeds, so the step never
+  fires there (and a failed fresh activation retries with `$installed === '0'`).
 
 ## 2. Server: user-management endpoints
 
@@ -72,7 +78,7 @@ same as `ajax_bulk_import_users`. Registered in the constructor next to it.
 | `anchor_fm_user_set_role` | `user_id`, `role` | `$u->set_role($role)`. |
 | `anchor_fm_user_set_password` | `user_id`, `password` | `wp_set_password`. Password never echoed. |
 | `anchor_fm_user_send_reset` | `user_id` | Same email as `ajax_ap_send_reset`, extracted into a shared `send_password_reset_email(WP_User)` used by both. |
-| `anchor_fm_user_delete` | `user_id` | `require_once ABSPATH . 'wp-admin/includes/user.php'`; `wp_delete_user($id)` (no reassignment). |
+| `anchor_fm_user_delete` | `user_id` | `require_once ABSPATH . 'wp-admin/includes/user.php'`; `wp_delete_user($id, get_current_user_id())` (content reassigned to the acting admin). |
 
 **`lastWatched`** comes from one grouped query per page:
 `SELECT user_id, MAX(last_viewed_at) FROM video_views WHERE user_id IN (…) GROUP BY user_id`.

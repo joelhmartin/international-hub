@@ -132,6 +132,7 @@ jQuery(function ($) {
 
     // --- Import CSV ---
     function openImport() {
+        let imported = false;
         modal.open('Import users from CSV', `
             <p class="afm__importHint">Columns in this order: username, first name, last name, email, password. A header row is optional; username and password are optional.</p>
             <div class="afm__formRow"><label class="afm__label">CSV file</label><input type="file" accept=".csv,text/csv,text/plain" data-um-file></div>
@@ -140,6 +141,7 @@ jQuery(function ($) {
             <label class="afm__check"><input type="checkbox" data-um-send checked> Email new users a link to set their password</label>
             <div class="afm__importResults" data-um-results hidden></div>
         `, 'Import', $b => {
+            if (imported) { modal.close(); return; }
             const file = ($b.find('[data-um-file]')[0] || {}).files;
             if (!file || !file[0]) { modalError($b, 'Please choose a CSV file first.'); return; }
             const data = new FormData();
@@ -155,9 +157,10 @@ jQuery(function ($) {
                     if (!res || !res.success) { modalError($b, errMessage(null, res, 'Import failed.')); return; }
                     renderImportResults($b, res.data);
                     load();
+                    imported = true;
                 })
                 .fail(xhr => modalError($b, errMessage(xhr, null, 'Import failed.')))
-                .always(() => modal.busy(false, 'Import'));
+                .always(() => modal.busy(false, imported ? 'Done' : 'Import'));
         });
     }
 
@@ -173,8 +176,15 @@ jQuery(function ($) {
 
     // --- Row actions ---
     function openRole(u) {
+        const userRoles = u.roles || [];
+        const roleKeys = roles.map(r => r.key);
+        const preselect = userRoles.find(r => roleKeys.indexOf(r) !== -1) || userRoles[0] || '';
+        const currentLine = userRoles.length > 1
+            ? `<div class="afm__help">Currently: ${esc(userRoles.map(roleLabel).join(', '))}. Saving replaces all of them with the role you pick.</div>`
+            : '';
         modal.open(`Change role — ${u.displayName}`, `
-            <div class="afm__formRow"><label class="afm__label">Role</label><select class="afm__select" data-um-role>${roleOptions((u.roles || [])[0] || '')}</select></div>
+            <div class="afm__formRow"><label class="afm__label">Role</label><select class="afm__select" data-um-role>${roleOptions(preselect)}</select></div>
+            ${currentLine}
             <div class="afm__help">Folder access follows role, so this changes what they can see.</div>
         `, 'Save', $b => {
             modal.busy(true, 'Saving…');
@@ -208,7 +218,7 @@ jQuery(function ($) {
     }
 
     function openRemove(u) {
-        modal.open('Remove user', `<div class="afm__help">Remove <strong>${esc(u.displayName)}</strong> (${esc(u.email)})? Their account, folder access and watch history are deleted. This cannot be undone.</div>`, 'Remove', $b => {
+        modal.open('Remove user', `<div class="afm__help">Remove <strong>${esc(u.displayName)}</strong> (${esc(u.email)})? Their login, folder access and watch history are deleted, and anything they authored on the site is reassigned to you. This cannot be undone.</div>`, 'Remove', $b => {
             modal.busy(true, 'Removing…');
             api('anchor_fm_user_delete', { user_id: u.id })
                 .done(res => {

@@ -4,6 +4,7 @@ Run on a staging copy with the plugin updated from 2.14.x, logged in as an admin
 
 ## Branding
 - [ ] International staging: sidebar logo shows (site icon), Settings → Anchor File Manager → Request-access recipient reads tiffany@tmjtherapycentre.com.
+  - Note: the 2.15.0 pin is host-gated (`tmjtherapycentre.com` or a `*.tmjtherapycentre.com` subdomain). Run this check on the production-host upgrade itself, or on a staging copy that is actually served at a tmjtherapycentre.com host — a staging copy reachable on any other host (e.g. a generic Kinsta staging domain) will NOT get the pin and will correctly show the site admin email instead.
 - [ ] Fresh install (STL staging): recipient defaults to the site admin email; setting a Portal logo URL changes the sidebar image; clearing it falls back to the site icon.
 
 ## Users tab
