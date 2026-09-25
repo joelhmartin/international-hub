@@ -33,3 +33,12 @@ Run on a staging copy with the plugin updated from 2.14.x, logged in as an admin
 - [ ] Creating "Subscriber" / "Administrator" / a duplicate name is refused with "A role with that name already exists."
 - [ ] Core and WooCommerce roles never appear in the Roles popup; International's popup starts empty.
 - [ ] A user given a portal role can log in and see only the folders shared with that role, and cannot reach wp-admin screens beyond their profile.
+
+## Security fixes (2.16.1)
+- [ ] AFM-01: as a shop manager (not admin), Product Docs → attach a file from outside the Product Docs folder → refused with "You cannot attach file #N…"; nothing saved. Attaching a file uploaded through Product Docs still works. Posting a non-product ID → "Product not found".
+- [ ] AFM-02: give a folder the rule (role X AND a 2026 date range); delete role X with another plugin (not the Roles popup); a subscriber still cannot see the folder. The Permissions popup shows "Missing role: x"; saving without fixing it is refused with a message.
+- [ ] AFM-03: Settings → Anchor File Manager → Private storage shows Protected / EXPOSED / Could not verify after "Check now". Independently: a harmless file in the store is not downloadable logged out at the origin or the CDN hostname, while a logged-in, permitted user can download it through the plugin.
+- [ ] AFM-04: an order placed with an offline method (on hold) does NOT show the product's documents in My Account until it is marked Processing/Completed.
+- [ ] AFM-05: two folders each containing "fixture.pdf" with different contents; move one into the other → both files still open with their own contents (one is stored as fixture-1.pdf).
+- [ ] AFM-06: a text file renamed to .pdf is rejected on upload; real PDFs, DOCX, JPG, MP4 still upload.
+- [ ] Existing data: review products' attached documents (Product Docs tab) and folder rules for anything unexpected granted before this release.

@@ -1344,6 +1344,8 @@ jQuery(function ($) {
                     conditions: conditions.map(condition => {
                         condition = condition && typeof condition === 'object' ? condition : {};
                         const type = String(condition.type || 'role');
+                        // Kept as-is so a re-save can't turn it into a real grant; the server rejects it.
+                        if (type === 'never') return { type: 'never' };
                         if (type === 'date') {
                             return { type: 'date', start: String(condition.start || ''), end: String(condition.end || '') };
                         }
@@ -1371,7 +1373,9 @@ jQuery(function ($) {
             $rule.find('[data-afm-perm-condition]').each(function () {
                 const $condition = $(this);
                 const type = String($condition.find('[data-afm-cond-type]').val() || 'role');
-                if (type === 'date') {
+                if (type === 'never') {
+                    rule.conditions.push({ type: 'never' });
+                } else if (type === 'date') {
                     rule.conditions.push({
                         type: 'date',
                         start: String($condition.find('[data-afm-cond-start]').val() || ''),
@@ -1396,8 +1400,14 @@ jQuery(function ($) {
 
     function roleOptions(selectedRole) {
         const roles = permissionRoles();
-        if (!roles.length) return '<option value="">No roles</option>';
-        return roles.map(r => `<option value="${esc(r.key)}" ${String(selectedRole || '') === String(r.key) ? 'selected' : ''}>${esc(r.label)}</option>`).join('');
+        const selected = String(selectedRole || '');
+        // A role that no longer exists stays visibly selected: defaulting to the
+        // first option would silently re-point the rule at a different group.
+        const missing = selected && !roles.some(r => String(r.key) === selected)
+            ? `<option value="${esc(selected)}" selected>Missing role: ${esc(selected)}</option>`
+            : '';
+        if (!roles.length) return missing || '<option value="">No roles</option>';
+        return missing + roles.map(r => `<option value="${esc(r.key)}" ${String(selectedRole || '') === String(r.key) ? 'selected' : ''}>${esc(r.label)}</option>`).join('');
     }
 
     function renderPermissionCondition(condition, ruleIdx, conditionIdx) {
@@ -1409,7 +1419,9 @@ jQuery(function ($) {
                </div>`
             : type === 'user'
                 ? `<input type="number" min="1" class="afm__input" placeholder="User ID" value="${esc(condition.userId || '')}" data-afm-cond-user-id>`
-                : `<select class="afm__select" data-afm-cond-role>${roleOptions(condition.role)}</select>`;
+                : type === 'never'
+                    ? `<span class="afm__muted">Not recognized — never matches. Remove it to save.</span>`
+                    : `<select class="afm__select" data-afm-cond-role>${roleOptions(condition.role)}</select>`;
 
         return `
             <div class="afm__permCondition" data-afm-perm-condition data-afm-condition-idx="${conditionIdx}">
@@ -1417,6 +1429,7 @@ jQuery(function ($) {
                     <option value="role" ${type === 'role' ? 'selected' : ''}>Role</option>
                     <option value="date" ${type === 'date' ? 'selected' : ''}>Date range</option>
                     <option value="user" ${type === 'user' ? 'selected' : ''}>User</option>
+                    ${type === 'never' ? '<option value="never" selected>Unrecognized</option>' : ''}
                 </select>
                 ${typedControl}
                 <button type="button" class="afm__iconBtn" data-afm-action="remove-perm-condition" data-afm-rule-idx="${ruleIdx}" data-afm-condition-idx="${conditionIdx}" aria-label="Remove condition">
@@ -1531,10 +1544,10 @@ jQuery(function ($) {
             users: state.usersDraft,
             policy: JSON.stringify(state.policyDraft),
         }).done(res => {
-            if (!res || !res.success) return;
+            if (!res || !res.success) { toast(errMessage(null, res, 'Could not save permissions.')); return; }
             closeModal();
             bootstrap();
-        });
+        }).fail(xhr => toast(errMessage(xhr, null, 'Could not save permissions.')));
     }
 
     function handleModalPrimary() {
@@ -3166,6 +3179,8 @@ jQuery(function ($) {
             renderProductDocsManage();
             loadProducts();
             loadMyProductDocs();
+        }).fail(xhr => {
+            $productDocsNotice.text(errMessage(xhr, null, 'Unable to save.')).prop('hidden', false);
         });
     });
 
@@ -3181,7 +3196,7 @@ jQuery(function ($) {
         api('anchor_pd_save_docs', { product_id: pid, docs: newDocs }).done(() => {
             loadProducts();
             loadMyProductDocs();
-        });
+        }).fail(xhr => toast(errMessage(xhr, null, 'Unable to remove the document.')));
     });
 
     $root.on('anchorfm:showProductDocs', function () {

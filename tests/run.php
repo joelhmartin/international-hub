@@ -19,6 +19,7 @@ function is_wp_error($thing) { return $thing instanceof WP_Error; }
 function wp_remote_get($url, $args = []) {
     $GLOBALS['afm_http_last_url'] = $url;
     $stub = isset($GLOBALS['afm_http_stub']) ? $GLOBALS['afm_http_stub'] : null;
+    if ($stub instanceof Closure) return $stub($url);
     return $stub === null ? new WP_Error('http_request_failed', 'No stub set') : $stub;
 }
 function wp_remote_retrieve_response_code($res) { return isset($res['response']['code']) ? $res['response']['code'] : 0; }
@@ -500,19 +501,73 @@ $normalized_policy = Anchor_FM_Permission_Policy::normalize([
             ],
         ],
     ],
-], ['customerrole']);
-check('permission policy normalize filters admin and swaps dates', $normalized_policy, [
+]);
+check('permission policy normalize keeps every condition (admin → never) and swaps dates', $normalized_policy, [
     'operator' => 'all',
     'rules' => [
         [
             'operator' => 'all',
             'conditions' => [
+                ['type' => 'never'],
                 ['type' => 'role', 'role' => 'customerrole'],
                 ['type' => 'date', 'start' => '2026-10-01', 'end' => '2026-10-31'],
             ],
         ],
     ],
 ]);
+
+// AFM-02: reading a policy must never widen it. A role that disappeared
+// outside the plugin stays a role condition nobody satisfies.
+$premium_2026 = ['operator' => 'any', 'rules' => [
+    ['operator' => 'all', 'conditions' => [
+        ['type' => 'role', 'role' => 'premium'],
+        ['type' => 'date', 'start' => '2026-01-01', 'end' => '2026-12-31'],
+    ]],
+]];
+check('AFM-02: outsider denied while role exists',
+    Anchor_FM_Permission_Policy::evaluate($premium_2026, ['userId' => 5, 'roles' => ['subscriber']], '2026-06-01'), false);
+check('AFM-02: outsider still denied after the role vanishes (read path keeps the condition)',
+    Anchor_FM_Permission_Policy::evaluate(Anchor_FM_Permission_Policy::normalize($premium_2026), ['userId' => 5, 'roles' => ['subscriber']], '2026-06-01'), false);
+check('AFM-02: malformed conditions become never, not dropped',
+    Anchor_FM_Permission_Policy::normalize(['rules' => [['operator' => 'all', 'conditions' => [
+        ['type' => 'user', 'userId' => 0], ['type' => 'date'], ['type' => 'bogus'], 'junk', ['type' => 'date', 'start' => '2026-01-01'],
+    ]]]])['rules'][0]['conditions'],
+    [['type' => 'never'], ['type' => 'never'], ['type' => 'never'], ['type' => 'never'], ['type' => 'date', 'start' => '2026-01-01', 'end' => '']]);
+check('AFM-02: an all-rule with a malformed conjunct grants nobody in its date window',
+    Anchor_FM_Permission_Policy::evaluate(['rules' => [['operator' => 'all', 'conditions' => [
+        ['type' => 'bogus'], ['type' => 'date', 'start' => '2026-01-01'],
+    ]]]], ['userId' => 5, 'roles' => []], '2026-06-01'), false);
+check('AFM-02: a rule with no conditions stays as a false rule (top-level all denies)',
+    Anchor_FM_Permission_Policy::evaluate(['operator' => 'all', 'rules' => [
+        ['operator' => 'all', 'conditions' => []],
+        ['operator' => 'all', 'conditions' => [['type' => 'user', 'userId' => 5]]],
+    ]], ['userId' => 5, 'roles' => []], '2026-06-01'), false);
+check('AFM-02: a vanished role that comes back works again (nothing was rewritten)',
+    Anchor_FM_Permission_Policy::evaluate(Anchor_FM_Permission_Policy::normalize($premium_2026), ['userId' => 5, 'roles' => ['premium']], '2026-06-01'), true);
+
+// --- validate_for_write: writes are rejected, never silently simplified ---
+$vw = Anchor_FM_Permission_Policy::validate_for_write($premium_2026, ['subscriber']);
+check('write: unknown role rejected', [$vw['ok'], $vw['error']], [false, 'Rule 1 uses a role that no longer exists (premium). Pick another role or remove that condition.']);
+check('write: valid policy accepted and normalized',
+    Anchor_FM_Permission_Policy::validate_for_write($premium_2026, ['premium']),
+    ['ok' => true, 'error' => '', 'policy' => Anchor_FM_Permission_Policy::normalize($premium_2026)]);
+check('write: administrator role rejected',
+    Anchor_FM_Permission_Policy::validate_for_write(['rules' => [['conditions' => [['type' => 'role', 'role' => 'administrator']]]]], ['administrator'])['ok'], false);
+check('write: unrecognized condition rejected',
+    Anchor_FM_Permission_Policy::validate_for_write(['rules' => [['conditions' => [['type' => 'never']]]]], [])['error'], 'Rule 1 has a condition that is not recognized. Remove it and save again.');
+check('write: empty date rejected',
+    Anchor_FM_Permission_Policy::validate_for_write(['rules' => [['conditions' => [['type' => 'date', 'start' => '', 'end' => '']]]]], [])['error'], 'Rule 1: a date range needs a start or end date.');
+check('write: missing user rejected',
+    Anchor_FM_Permission_Policy::validate_for_write(['rules' => [['conditions' => [['type' => 'user', 'userId' => '']]]]], [])['error'], 'Rule 1: choose a user.');
+check('write: rule with no conditions rejected',
+    Anchor_FM_Permission_Policy::validate_for_write(['rules' => [['conditions' => []]]], [])['error'], 'Rule 1 has no conditions.');
+check('write: no rules is fine (clears the policy)',
+    Anchor_FM_Permission_Policy::validate_for_write(['operator' => 'any', 'rules' => []], [])['ok'], true);
+check('write: second rule numbered in the message',
+    Anchor_FM_Permission_Policy::validate_for_write(['rules' => [
+        ['conditions' => [['type' => 'user', 'userId' => 3]]],
+        ['conditions' => [['type' => 'role', 'role' => 'gone']]],
+    ]], ['subscriber'])['error'], 'Rule 2 uses a role that no longer exists (gone). Pick another role or remove that condition.');
 
 // --- Anchor_FM_Permission_Index ---
 require __DIR__ . '/../includes/class-afm-permission-index.php';
@@ -620,6 +675,85 @@ check('delete role: owned and empty ok', Anchor_FM_User_Admin::can_delete_role('
 check('delete role: not owned refused', Anchor_FM_User_Admin::can_delete_role('editor', ['tmj_patient'], 0)['ok'], false);
 check('delete role: in use refused', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 3), ['ok' => false, 'error' => '3 users still have this role. Move them to another role first.']);
 check('delete role: one user wording', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 1)['error'], '1 user still has this role. Move them to another role first.');
+
+// --- Anchor_FM_Upload_Types (AFM-06 narrow exception) ---
+require __DIR__ . '/../includes/class-afm-upload-types.php';
+check('types: legacy .doc read as OLE container accepted', Anchor_FM_Upload_Types::is_known_misdetection('doc', 'application/CDFV2'), true);
+check('types: .m4a read as mp4 video accepted', Anchor_FM_Upload_Types::is_known_misdetection('M4A', 'video/mp4'), true);
+check('types: .csv read as C source accepted', Anchor_FM_Upload_Types::is_known_misdetection('csv', 'text/x-c'), true);
+check('types: octet-stream never accepted (proves nothing)', Anchor_FM_Upload_Types::is_known_misdetection('doc', 'application/octet-stream'), false);
+check('types: text claiming to be a PDF rejected', Anchor_FM_Upload_Types::is_known_misdetection('pdf', 'text/plain'), false);
+check('types: HTML named .txt rejected', Anchor_FM_Upload_Types::is_known_misdetection('txt', 'text/html'), false);
+check('types: PHP named .csv rejected', Anchor_FM_Upload_Types::is_known_misdetection('csv', 'text/x-php'), false);
+check('types: empty detection rejected', Anchor_FM_Upload_Types::is_known_misdetection('doc', ''), false);
+
+// --- Anchor_FM_Storage_Guard (AFM-03) ---
+// Real temp directory; the "web server" is a stub that serves whatever file the URL maps to.
+if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/afm-site/');
+function wp_normalize_path($p) { return str_replace('\\', '/', (string) $p); }
+function untrailingslashit($s) { return rtrim((string) $s, '/\\'); }
+function trailingslashit($s) { return untrailingslashit($s) . '/'; }
+function site_url() { return 'https://example.test'; }
+function current_time($t) { return '2026-09-25 12:00:00'; }
+function apply_filters($tag, $value) { return $value; }
+function wp_generate_password($len = 12, $special = true, $extra = false) { return substr(bin2hex(random_bytes($len)), 0, $len); }
+$afm_uploads = sys_get_temp_dir() . '/afm-uploads-' . getmypid();
+function wp_upload_dir($a = null, $b = true) { global $afm_uploads; return ['basedir' => $afm_uploads, 'baseurl' => 'https://example.test/wp-content/uploads']; }
+require __DIR__ . '/../includes/class-afm-storage-guard.php';
+
+$store = $afm_uploads . '/.anchor-private-files';
+@mkdir($store, 0755, true);
+chmod($store, 0755);
+Anchor_FM_Storage_Guard::tighten([$store]);
+clearstatcache();
+check('guard: tighten is a no-op under CLI (may be a different OS user than PHP-FPM)', substr(sprintf('%o', fileperms($store)), -4), '0755');
+Anchor_FM_Storage_Guard::narrow_owned([$store], posix_geteuid() + 1);
+clearstatcache();
+check('guard: never narrows a directory another user owns', substr(sprintf('%o', fileperms($store)), -4), '0755');
+Anchor_FM_Storage_Guard::narrow_owned([$store], posix_geteuid());
+clearstatcache();
+check('guard: narrows an owned 0755 store to 0700', substr(sprintf('%o', fileperms($store)), -4), '0700');
+
+check('guard: url for a path under uploads',
+    Anchor_FM_Storage_Guard::url_for_path($store . '/x.txt'), 'https://example.test/wp-content/uploads/.anchor-private-files/x.txt');
+check('guard: no url outside uploads and web root', Anchor_FM_Storage_Guard::url_for_path('/var/private/store'), '');
+
+$serve = function ($url) use ($afm_uploads) {
+    $path = $afm_uploads . substr($url, strlen('https://example.test/wp-content/uploads'));
+    return ['response' => ['code' => 200], 'body' => (string) @file_get_contents($path)];
+};
+$GLOBALS['afm_http_stub'] = $serve;
+$r = Anchor_FM_Storage_Guard::check([$store]);
+check('guard: served canary → exposed', $r['status'], 'exposed');
+check('guard: canary removed after the probe', glob($store . '/afm-canary-*'), []);
+
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 403], 'body' => 'Forbidden']; };
+check('guard: refused → protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'protected');
+
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 200], 'body' => '<html>Log in</html>']; };
+check('guard: 200 without the canary bytes (challenge/login page) → unknown', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 404], 'body' => 'Not found']; };
+check('guard: 404 → protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'protected');
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 401], 'body' => 'Auth required']; };
+check('guard: 401 (staging basic auth) → unknown', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 502], 'body' => ''];};
+check('guard: 5xx → unknown', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
+
+$GLOBALS['afm_http_stub'] = function ($url) { return new WP_Error('http_request_failed', 'loopback blocked'); };
+check('guard: loopback failure → unknown, never protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
+
+$legacy = $afm_uploads . '/anchor-private-files';
+@mkdir($legacy, 0755, true);
+$GLOBALS['afm_http_stub'] = function ($url) use ($serve) {
+    // Only the legacy directory leaks.
+    return strpos($url, '/anchor-private-files/') !== false && strpos($url, '/.anchor') === false
+        ? $serve($url) : ['response' => ['code' => 403], 'body' => ''];
+};
+check('guard: one exposed directory (legacy) makes the whole store exposed',
+    Anchor_FM_Storage_Guard::check([$store, $legacy])['status'], 'exposed');
+check('guard: no directories → unknown', Anchor_FM_Storage_Guard::check([$afm_uploads . '/missing'])['status'], 'unknown');
+unset($GLOBALS['afm_http_stub']);
+exec('rm -rf ' . escapeshellarg($afm_uploads));
 
 echo $failures === 0 ? "\nALL PASS\n" : "\n$failures FAILURE(S)\n";
 exit($failures === 0 ? 0 : 1);

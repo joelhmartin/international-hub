@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.16.0
+ * Version: 2.16.1
  * Author: Anchor Corps
  */
 
@@ -17,10 +17,12 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-copy-namer.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-index.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-storage-guard.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-upload-types.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.16.0';
+    const VERSION = '2.16.1';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -40,6 +42,9 @@ class Anchor_Private_File_Manager {
     const VIMEO_BULK_MAX = 50;
     const OPT_DB_VERSION = 'anchor_fm_db_version';
     const CRON_PRUNE_RESUME = 'anchor_fm_prune_resume';
+    const CRON_STORAGE_CHECK = 'anchor_fm_storage_check';
+    /** Last result of Anchor_FM_Storage_Guard::check(). */
+    const OPT_STORAGE_CHECK = 'anchor_fm_storage_check';
     const OPT_EMAIL_ON_UPLOAD = 'anchor_fm_email_on_upload';
     const META_PRODUCT_DOCS = '_anchor_pd_docs';
     const OPT_PD_FOLDER_ID = 'anchor_fm_pd_folder_id';
@@ -131,11 +136,75 @@ class Anchor_Private_File_Manager {
         add_action('admin_init', [$this, 'register_settings']);
 
         add_action(self::CRON_PRUNE_RESUME, [$this, 'cron_prune_resume']);
+        add_action(self::CRON_STORAGE_CHECK, [$this, 'run_storage_check']);
+        add_action('admin_post_anchor_fm_storage_check', [$this, 'handle_storage_check_request']);
+        add_action('admin_notices', [$this, 'render_storage_notice']);
 
         $this->maybe_upgrade_db();
 
         if (!wp_next_scheduled(self::CRON_PRUNE_RESUME)) {
             wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', self::CRON_PRUNE_RESUME);
+        }
+        if (!wp_next_scheduled(self::CRON_STORAGE_CHECK)) {
+            // First run soon, so a site learns its exposure the day it updates.
+            wp_schedule_event(time() + MINUTE_IN_SECONDS, 'daily', self::CRON_STORAGE_CHECK);
+        }
+    }
+
+    /** Every store directory on disk that may hold files: the active one, plus a leftover legacy one. */
+    private static function storage_dirs() {
+        $dirs = [self::storage_base()];
+        $uploads = wp_upload_dir(null, false);
+        $legacy = trailingslashit($uploads['basedir']) . self::LEGACY_STORAGE_DIRNAME;
+        if (is_dir($legacy)) $dirs[] = $legacy;
+        return array_values(array_unique($dirs));
+    }
+
+    public function run_storage_check() {
+        self::ensure_upload_storage();
+        $result = Anchor_FM_Storage_Guard::check(self::storage_dirs());
+        // Autoloaded: the admin notice reads it on every wp-admin page.
+        update_option(self::OPT_STORAGE_CHECK, $result, true);
+        return $result;
+    }
+
+    private function storage_check_result() {
+        $r = get_option(self::OPT_STORAGE_CHECK, []);
+        return is_array($r) ? $r : [];
+    }
+
+    /** True only when the last check actually downloaded a stored file anonymously. */
+    private function storage_is_exposed() {
+        $r = $this->storage_check_result();
+        return isset($r['status']) && $r['status'] === Anchor_FM_Storage_Guard::STATUS_EXPOSED;
+    }
+
+    /** Refuse new uploads while the store is confirmed public, so nothing new lands there. */
+    private function require_storage_not_exposed() {
+        if ($this->storage_is_exposed()) {
+            $this->json_error('Uploads are paused: the private file store can be downloaded without logging in. An administrator must fix this (Settings → Anchor File Manager) before new files can be added.', 503);
+        }
+    }
+
+    public function handle_storage_check_request() {
+        if (!current_user_can('manage_options')) wp_die('Forbidden', 403);
+        check_admin_referer('anchor_fm_storage_check');
+        $this->run_storage_check();
+        wp_safe_redirect(admin_url('options-general.php?page=anchor-private-file-manager'));
+        exit;
+    }
+
+    public function render_storage_notice() {
+        if (!current_user_can('manage_options')) return;
+        $r = $this->storage_check_result();
+        $status = isset($r['status']) ? $r['status'] : '';
+        $url = admin_url('options-general.php?page=anchor-private-file-manager');
+        if ($status === Anchor_FM_Storage_Guard::STATUS_EXPOSED) {
+            echo '<div class="notice notice-error"><p><strong>Anchor File Manager:</strong> private files can be downloaded without logging in, and uploads are paused. <a href="' . esc_url($url) . '">See details</a>.</p></div>';
+        } elseif ($status === Anchor_FM_Storage_Guard::STATUS_UNKNOWN) {
+            // Uploads stay open — a host that blocks loopback requests would
+            // otherwise lose uploads with no exposure found — but it is shown.
+            echo '<div class="notice notice-warning"><p><strong>Anchor File Manager:</strong> could not confirm that private files are protected from public download. <a href="' . esc_url($url) . '">Check it</a>.</p></div>';
         }
     }
 
@@ -300,7 +369,45 @@ class Anchor_Private_File_Manager {
                 </table>
                 <?php submit_button(); ?>
             </form>
+            <?php $this->render_storage_status(); ?>
         </div>
+        <?php
+    }
+
+    private function render_storage_status() {
+        $r = $this->storage_check_result();
+        $status = isset($r['status']) ? $r['status'] : '';
+        $labels = [
+            Anchor_FM_Storage_Guard::STATUS_PROTECTED => ['Protected', '#1a7f37'],
+            Anchor_FM_Storage_Guard::STATUS_EXPOSED   => ['EXPOSED — files are publicly downloadable', '#cf222e'],
+            Anchor_FM_Storage_Guard::STATUS_UNKNOWN   => ['Could not verify', '#9a6700'],
+        ];
+        [$label, $color] = isset($labels[$status]) ? $labels[$status] : ['Not checked yet', '#57606a'];
+        ?>
+        <h2>Private storage</h2>
+        <p>
+            <strong style="color: <?php echo esc_attr($color); ?>"><?php echo esc_html($label); ?></strong>
+            <?php if (!empty($r['checked_at'])) : ?>
+                — checked <?php echo esc_html($r['checked_at']); ?>
+            <?php endif; ?>
+        </p>
+        <?php if (!empty($r['details'])) : ?>
+            <ul style="list-style: disc; margin-left: 20px;">
+                <?php foreach ((array) $r['details'] as $d) : ?>
+                    <li><code><?php echo esc_html($d['dir']); ?></code> — <?php echo esc_html($d['note']); ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+        <p class="description">
+            The plugin puts a random test file in each storage folder and requests it from this server without logging in.
+            "Protected" means the origin refused it; a CDN in front of the site is not covered and should be checked separately.
+            If this says exposed, block the folder in the web-server config (see docs/PRIVATE-STORAGE.md) and check again.
+        </p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <input type="hidden" name="action" value="anchor_fm_storage_check">
+            <?php wp_nonce_field('anchor_fm_storage_check'); ?>
+            <?php submit_button('Check now', 'secondary', 'submit', false); ?>
+        </form>
         <?php
     }
 
@@ -432,20 +539,22 @@ class Anchor_Private_File_Manager {
 
     public static function deactivate() {
         wp_clear_scheduled_hook(self::CRON_PRUNE_RESUME);
+        wp_clear_scheduled_hook(self::CRON_STORAGE_CHECK);
     }
 
     private static function ensure_upload_storage() {
         $base = self::storage_base();
         if (!file_exists($base)) {
             wp_mkdir_p($base);
-            // Nginx ignores the .htaccess below, so on those hosts the mode is
-            // the guard that holds: the web server runs as a different user
-            // than PHP-FPM, and 0700 leaves it unable to traverse the tree
-            // while PHP keeps full access. Applied only at creation -- an
-            // administrator who has deliberately widened an existing store
-            // should not have it silently changed back on the next upload.
-            @chmod($base, 0700);
         }
+        // Nginx ignores the .htaccess below, so on those hosts the directory
+        // mode is a guard that can hold: when the web server runs as a
+        // different user than PHP-FPM, 0700 leaves it unable to traverse the
+        // tree. Applied to existing stores too — including a leftover legacy
+        // directory — since an older, wider mode is exactly the exposure
+        // (AFM-03). Whether it actually works is verified over HTTP by
+        // Anchor_FM_Storage_Guard::check().
+        Anchor_FM_Storage_Guard::tighten(self::storage_dirs());
 
         $htaccess = $base . '/.htaccess';
         if (!file_exists($htaccess)) {
@@ -1228,8 +1337,10 @@ class Anchor_Private_File_Manager {
      *
      *   - the leading dot in the directory name, which Nginx denies via its
      *     standard "any URI containing /." rule, and
-     *   - mode 0700 set at creation, which the web-server user cannot
-     *     traverse because it runs as a different user than PHP-FPM.
+     *   - mode 0700 on store directories PHP owns, which the web-server user
+     *     cannot traverse when it runs as a different user than PHP-FPM.
+     *
+     * Neither is assumed: Anchor_FM_Storage_Guard checks over HTTP daily.
      *
      * Moving the store outside the web root is NOT a safe alternative on
      * every host: managed platforms confine PHP-FPM with open_basedir, and a
@@ -1275,6 +1386,37 @@ class Anchor_Private_File_Manager {
         return trailingslashit($this->get_storage_dir()) . $folder_part . '/' . $file_row->stored_name;
     }
 
+    /** The on-disk directory for a folder, created with its deny files if missing. */
+    private function ensure_folder_dir($folder_id) {
+        self::ensure_upload_storage();
+        $dir = trailingslashit($this->get_storage_dir()) . (int) $folder_id;
+        if (!file_exists($dir)) {
+            wp_mkdir_p($dir);
+            if (!file_exists($dir . '/.htaccess')) @file_put_contents($dir . '/.htaccess', "Deny from all\n");
+            if (!file_exists($dir . '/index.php')) @file_put_contents($dir . '/index.php', "<?php\n// Silence is golden.\n");
+        }
+        return $dir;
+    }
+
+    /**
+     * Claim a stored filename in $dir that no other file uses, by creating it
+     * exclusively (fopen 'x'). wp_unique_filename() alone only checks, so two
+     * requests could pick the same name and the second write would replace
+     * the first file's bytes (AFM-05). The caller then writes over its own
+     * empty placeholder, and must unlink it if that write fails.
+     */
+    private static function reserve_stored_name($dir, $name) {
+        for ($i = 0; $i < 20; $i++) {
+            $candidate = wp_unique_filename($dir, $name);
+            $handle = @fopen(trailingslashit($dir) . $candidate, 'x');
+            if ($handle) {
+                fclose($handle);
+                return $candidate;
+            }
+        }
+        return false;
+    }
+
     private function cap_rank($cap) {
         switch ($cap) {
             case 'manage': return 3;
@@ -1303,8 +1445,13 @@ class Anchor_Private_File_Manager {
         }));
     }
 
+    /**
+     * Stored policy → canonical form. Deliberately NOT filtered against the
+     * current role list: dropping a condition on a vanished role would widen
+     * the rule (AFM-02). Saves go through validate_for_write() instead.
+     */
     private function normalize_permission_policy($policy) {
-        return Anchor_FM_Permission_Policy::normalize($policy, $this->get_valid_permission_role_keys());
+        return Anchor_FM_Permission_Policy::normalize($policy);
     }
 
     private function permission_policy_context($user_id) {
@@ -1953,19 +2100,14 @@ class Anchor_Private_File_Manager {
             return new WP_Error('source_missing', 'Source file is missing on disk');
         }
 
-        self::ensure_upload_storage();
-        $target_dir = trailingslashit($this->get_storage_dir()) . (int) $target_folder_id;
-        if (!file_exists($target_dir)) {
-            wp_mkdir_p($target_dir);
-            $htaccess = $target_dir . '/.htaccess';
-            if (!file_exists($htaccess)) { @file_put_contents($htaccess, "Deny from all\n"); }
-            $index = $target_dir . '/index.php';
-            if (!file_exists($index)) { @file_put_contents($index, "<?php\n// Silence is golden.\n"); }
+        $target_dir = $this->ensure_folder_dir($target_folder_id);
+        $stored = self::reserve_stored_name($target_dir, $file->stored_name);
+        if ($stored === false) {
+            return new WP_Error('copy_failed', 'Could not reserve a file name on disk');
         }
-
-        $stored = wp_unique_filename($target_dir, $file->stored_name);
         $dest = trailingslashit($target_dir) . $stored;
         if (!@copy($src_path, $dest)) {
+            @unlink($dest);
             return new WP_Error('copy_failed', 'Could not copy file on disk');
         }
 
@@ -2849,24 +2991,68 @@ class Anchor_Private_File_Manager {
     }
 
     /**
-     * Validate an uploaded file against the extension allow-list. Returns the
-     * resolved ['ext' => ..., 'type' => ...] on success, or false when the
-     * type is disallowed. The real (content-sniffed) extension from
-     * wp_check_filetype_and_ext() is preferred; when that can't determine a
-     * type we fall back to the sanitized filename's extension so the
-     * allow-list is still enforced (and disallowed types are rejected).
+     * extension => MIME for every allowed extension, from WordPress's full
+     * type list. This is the plugin's upload policy for its private store.
+     */
+    private static function allowed_upload_mimes() {
+        $allowed = self::allowed_upload_extensions();
+        $map = [];
+        foreach (wp_get_mime_types() as $exts => $mime) {
+            foreach (explode('|', $exts) as $ext) {
+                if (in_array($ext, $allowed, true)) $map[$ext] = $mime;
+            }
+        }
+        // Formats older WordPress versions don't list.
+        if (in_array('heic', $allowed, true) && !isset($map['heic'])) $map['heic'] = 'image/heic';
+        return (array) apply_filters('anchor_fm_upload_mimes', $map);
+    }
+
+    /**
+     * Validate an uploaded file by content and extension. Returns
+     * ['ext', 'type', 'filename'] on success — filename is WordPress's
+     * corrected name when the extension didn't match the content — or false.
+     *
+     * A WordPress rejection is final (AFM-06), with one narrow exception:
+     * content types libmagic is known to misreport for a genuine file of that
+     * extension (Anchor_FM_Upload_Types). There is no fallback to trusting
+     * the filename's extension.
      */
     private function validate_upload_type($tmp, $filename) {
-        $ft   = wp_check_filetype_and_ext($tmp, $filename);
-        $ext  = !empty($ft['ext'])  ? strtolower($ft['ext'])  : '';
-        $type = !empty($ft['type']) ? $ft['type'] : '';
-        if ($ext === '') {
-            $ext = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+        $mimes = self::allowed_upload_mimes();
+
+        // wp_check_filetype_and_ext() finally requires the type to be in the
+        // site-wide get_allowed_mime_types(), which other plugins filter. The
+        // private store's policy is this plugin's allow-list, so apply it for
+        // this one check only.
+        $allow = function ($site_mimes) use ($mimes) { return array_merge((array) $site_mimes, $mimes); };
+        add_filter('upload_mimes', $allow, PHP_INT_MAX);
+        try {
+            $ft = wp_check_filetype_and_ext($tmp, $filename, $mimes);
+        } finally {
+            remove_filter('upload_mimes', $allow, PHP_INT_MAX);
         }
-        if ($ext === '' || !in_array($ext, self::allowed_upload_extensions(), true)) {
-            return false;
+
+        $ext  = !empty($ft['ext'])  ? strtolower((string) $ft['ext']) : '';
+        $type = !empty($ft['type']) ? (string) $ft['type'] : '';
+        if ($ext !== '' && $type !== '' && isset($mimes[$ext])) {
+            $name = !empty($ft['proper_filename']) ? (string) $ft['proper_filename'] : (string) $filename;
+            return ['ext' => $ext, 'type' => $type, 'filename' => $name];
         }
-        return ['ext' => $ext, 'type' => $type !== '' ? $type : 'application/octet-stream'];
+
+        $claimed = strtolower((string) pathinfo((string) $filename, PATHINFO_EXTENSION));
+        if (isset($mimes[$claimed]) && Anchor_FM_Upload_Types::is_known_misdetection($claimed, self::sniff_mime($tmp))) {
+            return ['ext' => $claimed, 'type' => $mimes[$claimed], 'filename' => (string) $filename];
+        }
+        return false;
+    }
+
+    private static function sniff_mime($path) {
+        if (!function_exists('finfo_open')) return '';
+        $finfo = @finfo_open(FILEINFO_MIME_TYPE);
+        if (!$finfo) return '';
+        $mime = @finfo_file($finfo, $path);
+        finfo_close($finfo);
+        return is_string($mime) ? $mime : '';
     }
 
     public function ajax_upload() {
@@ -2879,20 +3065,9 @@ class Anchor_Private_File_Manager {
         if (!$this->can_user_upload_to_folder($user_id, $folder_id)) $this->json_error('Forbidden', 403);
 
         if (empty($_FILES['files'])) $this->json_error('No files');
+        $this->require_storage_not_exposed();
 
-        self::ensure_upload_storage();
-        $folder_dir = trailingslashit($this->get_storage_dir()) . $folder_id;
-        if (!file_exists($folder_dir)) {
-            wp_mkdir_p($folder_dir);
-            $htaccess = $folder_dir . '/.htaccess';
-            if (!file_exists($htaccess)) {
-                @file_put_contents($htaccess, "Deny from all\n");
-            }
-            $index = $folder_dir . '/index.php';
-            if (!file_exists($index)) {
-                @file_put_contents($index, "<?php\n// Silence is golden.\n");
-            }
-        }
+        $folder_dir = $this->ensure_folder_dir($folder_id);
 
         global $wpdb;
         $files_table = self::table('files');
@@ -2912,18 +3087,21 @@ class Anchor_Private_File_Manager {
             $tmp = (string) $tmp_names[$i];
             $size = (int) $sizes[$i];
 
-            $sanitized = sanitize_file_name($original);
-            $unique = wp_unique_filename($folder_dir, $sanitized);
-
-            $valid = $this->validate_upload_type($tmp, $unique);
+            $valid = $this->validate_upload_type($tmp, sanitize_file_name($original));
             if ($valid === false) {
                 $rejected[] = $original;
                 continue;
             }
             $mime = $valid['type'];
 
+            $unique = self::reserve_stored_name($folder_dir, $valid['filename']);
+            if ($unique === false) {
+                $rejected[] = $original;
+                continue;
+            }
             $dest = trailingslashit($folder_dir) . $unique;
             if (!@move_uploaded_file($tmp, $dest)) {
+                @unlink($dest);
                 continue;
             }
 
@@ -3556,33 +3734,36 @@ class Anchor_Private_File_Manager {
         $file = $this->get_file_row($file_id);
         if (!$file) $this->json_error('Not found', 404);
 
+        if ((int) $file->folder_id === $target_folder) {
+            $this->json_success(['moved' => true]);
+        }
+
         $current_path = $this->get_file_path_on_disk($file);
         if (!file_exists($current_path)) $this->json_error('File missing on disk', 404);
 
-        self::ensure_upload_storage();
-        $target_dir = trailingslashit($this->get_storage_dir()) . $target_folder;
-        if (!file_exists($target_dir)) {
-            wp_mkdir_p($target_dir);
-            $htaccess = $target_dir . '/.htaccess';
-            if (!file_exists($htaccess)) {
-                @file_put_contents($htaccess, "Deny from all\n");
-            }
-            $index = $target_dir . '/index.php';
-            if (!file_exists($index)) {
-                @file_put_contents($index, "<?php\n// Silence is golden.\n");
-            }
-        }
-
-        $dest = trailingslashit($target_dir) . $file->stored_name;
+        // Never reuse the source's stored name blindly: a same-named file in
+        // the destination would be overwritten, and two rows would then share
+        // one path (AFM-05).
+        $target_dir = $this->ensure_folder_dir($target_folder);
+        $stored = self::reserve_stored_name($target_dir, $file->stored_name);
+        if ($stored === false) $this->json_error('Could not move file', 500);
+        $dest = trailingslashit($target_dir) . $stored;
         if (!@rename($current_path, $dest)) {
+            @unlink($dest);
             $this->json_error('Could not move file', 500);
         }
 
         global $wpdb;
         $files_table = self::table('files');
-        $wpdb->update($files_table, [
+        $updated = $wpdb->update($files_table, [
             'folder_id' => $target_folder,
-        ], ['id' => $file_id], ['%d'], ['%d']);
+            'stored_name' => $stored,
+        ], ['id' => $file_id], ['%d', '%s'], ['%d']);
+        if ($updated === false) {
+            // Put the bytes back where the row still says they are.
+            @rename($dest, $current_path);
+            $this->json_error('Could not move file', 500);
+        }
 
         // Ensure view permissions follow the destination folder (when no explicit file perms exist).
         $this->copy_view_permissions('folder', $target_folder, 'file', $file_id, false);
@@ -4154,6 +4335,12 @@ class Anchor_Private_File_Manager {
 
         $valid_roles = $this->get_valid_permission_role_keys();
 
+        // Reject a bad rule before touching any stored permission, so a
+        // refused save leaves the previous grants exactly as they were.
+        $policy_check = Anchor_FM_Permission_Policy::validate_for_write($policy_input, $valid_roles);
+        if (!$policy_check['ok']) $this->json_error($policy_check['error']);
+        $policy_input = $policy_check['policy'];
+
         $normalized = [];
         foreach ($roles as $role) {
             $role = sanitize_key((string) $role);
@@ -4654,10 +4841,9 @@ class Anchor_Private_File_Manager {
         if (!$check['ok']) $this->json_error($check['error']);
 
         // Drop the role's folder grants and rule conditions so re-creating the
-        // same name later doesn't silently bring old access back. Rules are
-        // rewritten before remove_role(): once the role is gone, policy
-        // normalization would silently drop its conditions instead, which can
-        // widen an "all" rule to everyone.
+        // same name later doesn't silently bring old access back. Conditions
+        // on the role are rewritten as always-false and simplified, so an
+        // "all" rule that needed the role is dropped rather than widened.
         $this->strip_role_from_policies($key);
         global $wpdb;
         $wpdb->delete(self::table('permissions'), ['subject_type' => 'role', 'subject_key' => $key], ['%s', '%s']);
@@ -4708,12 +4894,25 @@ class Anchor_Private_File_Manager {
         return $ts < current_time('timestamp');
     }
 
+    /**
+     * Order statuses that entitle a buyer to a product's documents: paid ones
+     * only. "On hold" means payment is not confirmed yet (bank transfer,
+     * cheque), so it no longer unlocks documents (AFM-04). A site that wants
+     * access before payment must say so explicitly through the filter.
+     */
+    private function entitled_order_statuses() {
+        $statuses = (array) apply_filters('anchor_fm_entitled_order_statuses', ['wc-completed', 'wc-processing']);
+        return array_values(array_filter(array_map('strval', $statuses)));
+    }
+
     private function user_has_product($user_id, $product_id) {
         if (!function_exists('wc_get_orders')) return false;
+        $statuses = $this->entitled_order_statuses();
+        if (!$statuses) return false;
         $orders = wc_get_orders([
             'customer_id' => $user_id,
             'limit' => -1,
-            'status' => ['wc-completed', 'wc-processing', 'wc-on-hold'],
+            'status' => $statuses,
         ]);
         if (!$orders) return false;
         foreach ($orders as $order) {
@@ -4953,6 +5152,37 @@ class Anchor_Private_File_Manager {
         $this->json_success(['products' => $out]);
     }
 
+    /**
+     * The posted product, if it is a WooCommerce product the current user may
+     * edit; otherwise a 404/403. Every product-document write goes through it.
+     */
+    private function require_editable_product($product_id) {
+        $product_id = (int) $product_id;
+        $post = $product_id > 0 ? get_post($product_id) : null;
+        // Only parent products: documents are resolved from post_type=product.
+        if (!$post || $post->post_type !== 'product') {
+            $this->json_error('Product not found', 404);
+        }
+        if (!current_user_can('edit_post', $product_id)) $this->json_error('Forbidden', 403);
+        return $product_id;
+    }
+
+    /**
+     * Whether $user_id may attach $file_id to a product. Attaching is a grant —
+     * every buyer of the product can then download the file — so viewing the
+     * file is not enough (AFM-01). Allowed: files the user can manage, and
+     * files in the Product Docs area that exists for exactly this purpose.
+     */
+    private function can_publish_product_doc($user_id, $file_id) {
+        $file = $this->get_file_row($file_id);
+        if (!$file) return false;
+        if ($this->can_user_manage_file($user_id, $file_id)) return true;
+        $pd_folder = (int) get_option(self::OPT_PD_FOLDER_ID, 0);
+        if ($pd_folder <= 0) return false;
+        $folder_id = (int) $file->folder_id;
+        return $folder_id === $pd_folder || $this->is_descendant($folder_id, $pd_folder);
+    }
+
     public function ajax_pd_save_docs() {
         $this->require_nonce();
         if (!is_user_logged_in()) $this->json_error('Unauthorized', 401);
@@ -4961,12 +5191,24 @@ class Anchor_Private_File_Manager {
         $product_id = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
         $docs = isset($_POST['docs']) ? (array) $_POST['docs'] : [];
         if ($product_id <= 0) $this->json_error('Missing product_id');
+        $this->require_editable_product($product_id);
 
+        $user_id = get_current_user_id();
+        // Documents already on the product were authorized when attached;
+        // re-saving them (e.g. while removing a different one) grants nothing new.
+        $already = array_map('intval', array_column($this->get_product_docs($product_id), 'fileId'));
         $clean = [];
         foreach ($docs as $doc) {
             if (!is_array($doc)) continue;
             $file_id = isset($doc['fileId']) ? (int) $doc['fileId'] : 0;
             if ($file_id <= 0) continue;
+            // A reference to a deleted file grants nothing; drop it rather
+            // than make the product impossible to save.
+            if (!$this->get_file_row($file_id)) continue;
+            // All or nothing: one unauthorized file refuses the whole save.
+            if (!in_array($file_id, $already, true) && !$this->can_publish_product_doc($user_id, $file_id)) {
+                $this->json_error(sprintf('You cannot attach file #%d to a product. Upload it to Product Docs, or ask an administrator.', $file_id), 403);
+            }
             $title = isset($doc['title']) ? sanitize_text_field((string) $doc['title']) : '';
             $expires = isset($doc['expires']) ? sanitize_text_field((string) $doc['expires']) : '';
             $clean[] = [
@@ -5043,22 +5285,12 @@ class Anchor_Private_File_Manager {
 
         $product_id = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
         if ($product_id <= 0) $this->json_error('Missing product_id');
+        $this->require_editable_product($product_id);
         if (empty($_FILES['file'])) $this->json_error('No file');
+        $this->require_storage_not_exposed();
 
         $folder_id = self::ensure_product_docs_folder();
-        self::ensure_upload_storage();
-        $folder_dir = trailingslashit($this->get_storage_dir()) . $folder_id;
-        if (!file_exists($folder_dir)) {
-            wp_mkdir_p($folder_dir);
-            $htaccess = $folder_dir . '/.htaccess';
-            if (!file_exists($htaccess)) {
-                @file_put_contents($htaccess, "Deny from all\n");
-            }
-            $index = $folder_dir . '/index.php';
-            if (!file_exists($index)) {
-                @file_put_contents($index, "<?php\n// Silence is golden.\n");
-            }
-        }
+        $folder_dir = $this->ensure_folder_dir($folder_id);
 
         $file = $_FILES['file'];
         $original = (string) $file['name'];
@@ -5068,16 +5300,17 @@ class Anchor_Private_File_Manager {
             $this->json_error('Upload failed', 400);
         }
 
-        $sanitized = sanitize_file_name($original);
-        $unique = wp_unique_filename($folder_dir, $sanitized);
-        $valid = $this->validate_upload_type($tmp, $unique);
+        $valid = $this->validate_upload_type($tmp, sanitize_file_name($original));
         if ($valid === false) {
             $this->json_error('File type not allowed', 415);
         }
         $mime = $valid['type'];
+        $unique = self::reserve_stored_name($folder_dir, $valid['filename']);
+        if ($unique === false) $this->json_error('Could not save file', 500);
         $dest = trailingslashit($folder_dir) . $unique;
 
         if (!@move_uploaded_file($tmp, $dest)) {
+            @unlink($dest);
             $this->json_error('Could not save file', 500);
         }
 
