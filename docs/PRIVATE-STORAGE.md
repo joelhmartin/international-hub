@@ -188,3 +188,27 @@ directory an administrator has deliberately widened, and it will not fight
 Kinsta's "reset file permissions" tool. On a host where the web server and PHP
 run as the same user the mode guard cannot work at all; there the dot-prefix
 deny is the one that holds, which is why both exist.
+
+## Verifying it (2.16.1+)
+
+The plugin now checks this itself instead of assuming it. Daily, and on demand
+from **Settings → Anchor File Manager → Private storage → Check now**, it writes
+a random canary file into every store directory — the active one and any
+leftover legacy `anchor-private-files/` — requests it anonymously from the
+server, then deletes it.
+
+- **Protected** — the origin refused it (or the store has no public URL).
+- **EXPOSED** — the canary's bytes came back. An admin notice appears on every
+  wp-admin screen and **new uploads are refused** until a re-check passes.
+  Existing downloads through the plugin keep working.
+- **Could not verify** — the server couldn't request its own URL (some hosts
+  block loopback). Test by hand: put a harmless file in the store and request
+  it logged out, at the origin *and* through the CDN hostname.
+
+The check only sees the origin as this server reaches it. A CDN in front of the
+site is a separate route and must be tested separately.
+
+On every storage access the plugin also narrows existing store directories it
+owns (including the legacy one) to `0700`. That only helps when the web server
+runs as a different OS user than PHP — the canary check is what tells you
+whether it did.
