@@ -3179,6 +3179,8 @@ jQuery(function ($) {
             renderProductDocsManage();
             loadProducts();
             loadMyProductDocs();
+        }).fail(xhr => {
+            $productDocsNotice.text(errMessage(xhr, null, 'Unable to save.')).prop('hidden', false);
         });
     });
 
@@ -3194,7 +3196,7 @@ jQuery(function ($) {
         api('anchor_pd_save_docs', { product_id: pid, docs: newDocs }).done(() => {
             loadProducts();
             loadMyProductDocs();
-        });
+        }).fail(xhr => toast(errMessage(xhr, null, 'Unable to remove the document.')));
     });
 
     $root.on('anchorfm:showProductDocs', function () {

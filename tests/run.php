@@ -676,6 +676,17 @@ check('delete role: not owned refused', Anchor_FM_User_Admin::can_delete_role('e
 check('delete role: in use refused', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 3), ['ok' => false, 'error' => '3 users still have this role. Move them to another role first.']);
 check('delete role: one user wording', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 1)['error'], '1 user still has this role. Move them to another role first.');
 
+// --- Anchor_FM_Upload_Types (AFM-06 narrow exception) ---
+require __DIR__ . '/../includes/class-afm-upload-types.php';
+check('types: legacy .doc read as OLE container accepted', Anchor_FM_Upload_Types::is_known_misdetection('doc', 'application/CDFV2'), true);
+check('types: .m4a read as mp4 video accepted', Anchor_FM_Upload_Types::is_known_misdetection('M4A', 'video/mp4'), true);
+check('types: .csv read as C source accepted', Anchor_FM_Upload_Types::is_known_misdetection('csv', 'text/x-c'), true);
+check('types: octet-stream never accepted (proves nothing)', Anchor_FM_Upload_Types::is_known_misdetection('doc', 'application/octet-stream'), false);
+check('types: text claiming to be a PDF rejected', Anchor_FM_Upload_Types::is_known_misdetection('pdf', 'text/plain'), false);
+check('types: HTML named .txt rejected', Anchor_FM_Upload_Types::is_known_misdetection('txt', 'text/html'), false);
+check('types: PHP named .csv rejected', Anchor_FM_Upload_Types::is_known_misdetection('csv', 'text/x-php'), false);
+check('types: empty detection rejected', Anchor_FM_Upload_Types::is_known_misdetection('doc', ''), false);
+
 // --- Anchor_FM_Storage_Guard (AFM-03) ---
 // Real temp directory; the "web server" is a stub that serves whatever file the URL maps to.
 if (!defined('ABSPATH')) define('ABSPATH', sys_get_temp_dir() . '/afm-site/');
@@ -695,7 +706,13 @@ $store = $afm_uploads . '/.anchor-private-files';
 chmod($store, 0755);
 Anchor_FM_Storage_Guard::tighten([$store]);
 clearstatcache();
-check('guard: tighten narrows an existing 0755 store to 0700', substr(sprintf('%o', fileperms($store)), -4), '0700');
+check('guard: tighten is a no-op under CLI (may be a different OS user than PHP-FPM)', substr(sprintf('%o', fileperms($store)), -4), '0755');
+Anchor_FM_Storage_Guard::narrow_owned([$store], posix_geteuid() + 1);
+clearstatcache();
+check('guard: never narrows a directory another user owns', substr(sprintf('%o', fileperms($store)), -4), '0755');
+Anchor_FM_Storage_Guard::narrow_owned([$store], posix_geteuid());
+clearstatcache();
+check('guard: narrows an owned 0755 store to 0700', substr(sprintf('%o', fileperms($store)), -4), '0700');
 
 check('guard: url for a path under uploads',
     Anchor_FM_Storage_Guard::url_for_path($store . '/x.txt'), 'https://example.test/wp-content/uploads/.anchor-private-files/x.txt');
@@ -714,7 +731,13 @@ $GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 4
 check('guard: refused → protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'protected');
 
 $GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 200], 'body' => '<html>Log in</html>']; };
-check('guard: 200 without the canary bytes (login page) → protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'protected');
+check('guard: 200 without the canary bytes (challenge/login page) → unknown', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 404], 'body' => 'Not found']; };
+check('guard: 404 → protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'protected');
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 401], 'body' => 'Auth required']; };
+check('guard: 401 (staging basic auth) → unknown', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
+$GLOBALS['afm_http_stub'] = function ($url) { return ['response' => ['code' => 502], 'body' => ''];};
+check('guard: 5xx → unknown', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');
 
 $GLOBALS['afm_http_stub'] = function ($url) { return new WP_Error('http_request_failed', 'loopback blocked'); };
 check('guard: loopback failure → unknown, never protected', Anchor_FM_Storage_Guard::check([$store])['status'], 'unknown');

@@ -26,8 +26,15 @@ class Anchor_FM_Storage_Guard {
      * fails anyway, and narrowing it could lock PHP out of its own store.
      */
     public static function tighten(array $dirs) {
-        if (!function_exists('posix_geteuid')) return;
-        $uid = posix_geteuid();
+        // Never from WP-CLI: a CLI run may be a different OS user (a deploy
+        // user owning the tree, PHP-FPM reaching it through the group), and
+        // narrowing to 0700 there would lock the web PHP out of its store.
+        if (PHP_SAPI === 'cli' || !function_exists('posix_geteuid')) return;
+        self::narrow_owned($dirs, posix_geteuid());
+    }
+
+    /** chmod 0700 each directory owned by $uid that grants group/other access. */
+    public static function narrow_owned(array $dirs, $uid) {
         foreach ($dirs as $dir) {
             if (!is_dir($dir)) continue;
             if (@fileowner($dir) !== $uid) continue;
@@ -89,6 +96,10 @@ class Anchor_FM_Storage_Guard {
         if (@file_put_contents($file, $token) === false) {
             return ['dir' => $dir, 'url' => '', 'result' => self::STATUS_UNKNOWN, 'note' => 'Could not write a test file.'];
         }
+        // If the request dies mid-probe (fatal, timeout), still remove the canary.
+        register_shutdown_function(function () use ($file) {
+            if (file_exists($file)) @unlink($file);
+        });
         // Make the canary as readable as a real stored file could be, so a
         // directory-level block is what's being tested.
         @chmod($file, 0644);
@@ -113,7 +124,14 @@ class Anchor_FM_Storage_Guard {
             return ['dir' => $dir, 'url' => $url, 'result' => self::STATUS_EXPOSED,
                 'note' => 'An anonymous request downloaded the test file.'];
         }
-        return ['dir' => $dir, 'url' => $url, 'result' => self::STATUS_PROTECTED,
-            'note' => sprintf('Anonymous request refused (HTTP %d).', $code)];
+        // Only an explicit refusal proves protection. A 401 (staging basic
+        // auth), 5xx, 429 or a 200 challenge page says nothing about whether
+        // the file would be served to a visitor who got past it.
+        if (in_array($code, [403, 404, 410], true)) {
+            return ['dir' => $dir, 'url' => $url, 'result' => self::STATUS_PROTECTED,
+                'note' => sprintf('Anonymous request refused (HTTP %d).', $code)];
+        }
+        return ['dir' => $dir, 'url' => $url, 'result' => self::STATUS_UNKNOWN,
+            'note' => sprintf('Inconclusive response (HTTP %d) — test by hand.', $code)];
     }
 }

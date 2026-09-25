@@ -18,6 +18,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-range.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-policy.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-permission-index.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-afm-storage-guard.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-afm-upload-types.php';
 
 class Anchor_Private_File_Manager {
 
@@ -162,7 +163,8 @@ class Anchor_Private_File_Manager {
     public function run_storage_check() {
         self::ensure_upload_storage();
         $result = Anchor_FM_Storage_Guard::check(self::storage_dirs());
-        update_option(self::OPT_STORAGE_CHECK, $result, false);
+        // Autoloaded: the admin notice reads it on every wp-admin page.
+        update_option(self::OPT_STORAGE_CHECK, $result, true);
         return $result;
     }
 
@@ -193,9 +195,17 @@ class Anchor_Private_File_Manager {
     }
 
     public function render_storage_notice() {
-        if (!current_user_can('manage_options') || !$this->storage_is_exposed()) return;
+        if (!current_user_can('manage_options')) return;
+        $r = $this->storage_check_result();
+        $status = isset($r['status']) ? $r['status'] : '';
         $url = admin_url('options-general.php?page=anchor-private-file-manager');
-        echo '<div class="notice notice-error"><p><strong>Anchor File Manager:</strong> private files can be downloaded without logging in, and uploads are paused. <a href="' . esc_url($url) . '">See details</a>.</p></div>';
+        if ($status === Anchor_FM_Storage_Guard::STATUS_EXPOSED) {
+            echo '<div class="notice notice-error"><p><strong>Anchor File Manager:</strong> private files can be downloaded without logging in, and uploads are paused. <a href="' . esc_url($url) . '">See details</a>.</p></div>';
+        } elseif ($status === Anchor_FM_Storage_Guard::STATUS_UNKNOWN) {
+            // Uploads stay open — a host that blocks loopback requests would
+            // otherwise lose uploads with no exposure found — but it is shown.
+            echo '<div class="notice notice-warning"><p><strong>Anchor File Manager:</strong> could not confirm that private files are protected from public download. <a href="' . esc_url($url) . '">Check it</a>.</p></div>';
+        }
     }
 
     public function bootstrap_update_checker() {
@@ -1327,8 +1337,10 @@ class Anchor_Private_File_Manager {
      *
      *   - the leading dot in the directory name, which Nginx denies via its
      *     standard "any URI containing /." rule, and
-     *   - mode 0700 set at creation, which the web-server user cannot
-     *     traverse because it runs as a different user than PHP-FPM.
+     *   - mode 0700 on store directories PHP owns, which the web-server user
+     *     cannot traverse when it runs as a different user than PHP-FPM.
+     *
+     * Neither is assumed: Anchor_FM_Storage_Guard checks over HTTP daily.
      *
      * Moving the store outside the web root is NOT a safe alternative on
      * every host: managed platforms confine PHP-FPM with open_basedir, and a
@@ -2979,9 +2991,8 @@ class Anchor_Private_File_Manager {
     }
 
     /**
-     * extension => MIME for every allowed extension, taken from WordPress's
-     * full type list (not the current user's filtered one) so validation is
-     * content-based and matches the allow-list exactly.
+     * extension => MIME for every allowed extension, from WordPress's full
+     * type list. This is the plugin's upload policy for its private store.
      */
     private static function allowed_upload_mimes() {
         $allowed = self::allowed_upload_extensions();
@@ -3000,18 +3011,45 @@ class Anchor_Private_File_Manager {
      * Validate an uploaded file by content and extension. Returns
      * ['ext', 'type', 'filename'] on success — filename is WordPress's
      * corrected name when the extension didn't match the content — or false.
-     * When WordPress rejects the file, the plugin rejects it too; there is no
-     * fallback to trusting the filename's extension (AFM-06).
+     *
+     * A WordPress rejection is final (AFM-06), with one narrow exception:
+     * content types libmagic is known to misreport for a genuine file of that
+     * extension (Anchor_FM_Upload_Types). There is no fallback to trusting
+     * the filename's extension.
      */
     private function validate_upload_type($tmp, $filename) {
-        $ft = wp_check_filetype_and_ext($tmp, $filename, self::allowed_upload_mimes());
+        $mimes = self::allowed_upload_mimes();
+
+        // wp_check_filetype_and_ext() finally requires the type to be in the
+        // site-wide get_allowed_mime_types(), which other plugins filter. The
+        // private store's policy is this plugin's allow-list, so apply it for
+        // this one check only.
+        $allow = function ($site_mimes) use ($mimes) { return array_merge((array) $site_mimes, $mimes); };
+        add_filter('upload_mimes', $allow, PHP_INT_MAX);
+        $ft = wp_check_filetype_and_ext($tmp, $filename, $mimes);
+        remove_filter('upload_mimes', $allow, PHP_INT_MAX);
+
         $ext  = !empty($ft['ext'])  ? strtolower((string) $ft['ext']) : '';
         $type = !empty($ft['type']) ? (string) $ft['type'] : '';
-        if ($ext === '' || $type === '' || !in_array($ext, self::allowed_upload_extensions(), true)) {
-            return false;
+        if ($ext !== '' && $type !== '' && isset($mimes[$ext])) {
+            $name = !empty($ft['proper_filename']) ? (string) $ft['proper_filename'] : (string) $filename;
+            return ['ext' => $ext, 'type' => $type, 'filename' => $name];
         }
-        $name = !empty($ft['proper_filename']) ? (string) $ft['proper_filename'] : (string) $filename;
-        return ['ext' => $ext, 'type' => $type, 'filename' => $name];
+
+        $claimed = strtolower((string) pathinfo((string) $filename, PATHINFO_EXTENSION));
+        if (isset($mimes[$claimed]) && Anchor_FM_Upload_Types::is_known_misdetection($claimed, self::sniff_mime($tmp))) {
+            return ['ext' => $claimed, 'type' => $mimes[$claimed], 'filename' => (string) $filename];
+        }
+        return false;
+    }
+
+    private static function sniff_mime($path) {
+        if (!function_exists('finfo_open')) return '';
+        $finfo = @finfo_open(FILEINFO_MIME_TYPE);
+        if (!$finfo) return '';
+        $mime = @finfo_file($finfo, $path);
+        finfo_close($finfo);
+        return is_string($mime) ? $mime : '';
     }
 
     public function ajax_upload() {
@@ -4800,10 +4838,9 @@ class Anchor_Private_File_Manager {
         if (!$check['ok']) $this->json_error($check['error']);
 
         // Drop the role's folder grants and rule conditions so re-creating the
-        // same name later doesn't silently bring old access back. Rules are
-        // rewritten before remove_role(): once the role is gone, policy
-        // normalization would silently drop its conditions instead, which can
-        // widen an "all" rule to everyone.
+        // same name later doesn't silently bring old access back. Conditions
+        // on the role are rewritten as always-false and simplified, so an
+        // "all" rule that needed the role is dropped rather than widened.
         $this->strip_role_from_policies($key);
         global $wpdb;
         $wpdb->delete(self::table('permissions'), ['subject_type' => 'role', 'subject_key' => $key], ['%s', '%s']);
@@ -5119,7 +5156,8 @@ class Anchor_Private_File_Manager {
     private function require_editable_product($product_id) {
         $product_id = (int) $product_id;
         $post = $product_id > 0 ? get_post($product_id) : null;
-        if (!$post || !in_array($post->post_type, ['product', 'product_variation'], true)) {
+        // Only parent products: documents are resolved from post_type=product.
+        if (!$post || $post->post_type !== 'product') {
             $this->json_error('Product not found', 404);
         }
         if (!current_user_can('edit_post', $product_id)) $this->json_error('Forbidden', 403);
@@ -5158,6 +5196,9 @@ class Anchor_Private_File_Manager {
             if (!is_array($doc)) continue;
             $file_id = isset($doc['fileId']) ? (int) $doc['fileId'] : 0;
             if ($file_id <= 0) continue;
+            // A reference to a deleted file grants nothing; drop it rather
+            // than make the product impossible to save.
+            if (!$this->get_file_row($file_id)) continue;
             // All or nothing: one unauthorized file refuses the whole save.
             if (!$this->can_publish_product_doc($user_id, $file_id)) {
                 $this->json_error(sprintf('You cannot attach file #%d to a product. Upload it to Product Docs, or ask an administrator.', $file_id), 403);
