@@ -3026,8 +3026,11 @@ class Anchor_Private_File_Manager {
         // this one check only.
         $allow = function ($site_mimes) use ($mimes) { return array_merge((array) $site_mimes, $mimes); };
         add_filter('upload_mimes', $allow, PHP_INT_MAX);
-        $ft = wp_check_filetype_and_ext($tmp, $filename, $mimes);
-        remove_filter('upload_mimes', $allow, PHP_INT_MAX);
+        try {
+            $ft = wp_check_filetype_and_ext($tmp, $filename, $mimes);
+        } finally {
+            remove_filter('upload_mimes', $allow, PHP_INT_MAX);
+        }
 
         $ext  = !empty($ft['ext'])  ? strtolower((string) $ft['ext']) : '';
         $type = !empty($ft['type']) ? (string) $ft['type'] : '';
@@ -5191,6 +5194,9 @@ class Anchor_Private_File_Manager {
         $this->require_editable_product($product_id);
 
         $user_id = get_current_user_id();
+        // Documents already on the product were authorized when attached;
+        // re-saving them (e.g. while removing a different one) grants nothing new.
+        $already = array_map('intval', array_column($this->get_product_docs($product_id), 'fileId'));
         $clean = [];
         foreach ($docs as $doc) {
             if (!is_array($doc)) continue;
@@ -5200,7 +5206,7 @@ class Anchor_Private_File_Manager {
             // than make the product impossible to save.
             if (!$this->get_file_row($file_id)) continue;
             // All or nothing: one unauthorized file refuses the whole save.
-            if (!$this->can_publish_product_doc($user_id, $file_id)) {
+            if (!in_array($file_id, $already, true) && !$this->can_publish_product_doc($user_id, $file_id)) {
                 $this->json_error(sprintf('You cannot attach file #%d to a product. Upload it to Product Docs, or ask an administrator.', $file_id), 403);
             }
             $title = isset($doc['title']) ? sanitize_text_field((string) $doc['title']) : '';
