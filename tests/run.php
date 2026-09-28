@@ -670,6 +670,15 @@ check('reserved: woo customer', Anchor_FM_User_Admin::is_reserved_role_key('cust
 check('reserved: empty', Anchor_FM_User_Admin::is_reserved_role_key(''), true);
 check('reserved: custom ok', Anchor_FM_User_Admin::is_reserved_role_key('tmj_patient'), false);
 
+// --- Anchor_FM_User_Admin::is_staff_capabilities (staff stay in wp-admin) ---
+check('staff: administrator caps', Anchor_FM_User_Admin::is_staff_capabilities(['manage_options' => true, 'read' => true]), true);
+check('staff: editor/author/contributor (edit_posts)', Anchor_FM_User_Admin::is_staff_capabilities(['edit_posts' => true, 'read' => true]), true);
+check('staff: shop manager (manage_woocommerce)', Anchor_FM_User_Admin::is_staff_capabilities(['manage_woocommerce' => true]), true);
+check('staff: can list users', Anchor_FM_User_Admin::is_staff_capabilities(['list_users' => true]), true);
+check('staff: subscriber is not staff', Anchor_FM_User_Admin::is_staff_capabilities(['read' => true]), false);
+check('staff: customer is not staff', Anchor_FM_User_Admin::is_staff_capabilities(['read' => true, 'level_0' => true]), false);
+check('staff: a capability explicitly denied does not count', Anchor_FM_User_Admin::is_staff_capabilities(['read' => true, 'edit_posts' => false]), false);
+
 // --- Anchor_FM_User_Admin::can_delete_role ---
 check('delete role: owned and empty ok', Anchor_FM_User_Admin::can_delete_role('tmj_patient', ['tmj_patient'], 0), ['ok' => true, 'error' => '']);
 check('delete role: not owned refused', Anchor_FM_User_Admin::can_delete_role('editor', ['tmj_patient'], 0)['ok'], false);

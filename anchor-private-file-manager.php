@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.16.1
+ * Version: 2.16.2
  * Author: Anchor Corps
  */
 
@@ -22,7 +22,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-upload-types.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.16.1';
+    const VERSION = '2.16.2';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -939,6 +939,8 @@ class Anchor_Private_File_Manager {
                 'displayName' => $user->display_name,
             ],
             'roles' => $this->get_editable_roles_for_permissions(),
+            // What the Users tab may assign: no staff roles.
+            'userRoles' => $this->user_role_options(),
             'defaultRole' => (string) get_option('default_role'),
             'i18n' => [
                 'title' => __('File Manager', 'anchor-private-file-manager'),
@@ -4504,7 +4506,7 @@ class Anchor_Private_File_Manager {
 
         // Role (one for the whole batch; administrator not allowed).
         $role = isset($_POST['role']) ? sanitize_key((string) $_POST['role']) : '';
-        if (!Anchor_FM_User_Admin::valid_role($role, array_column($this->get_editable_roles_for_permissions(), 'key'))) {
+        if (!Anchor_FM_User_Admin::valid_role($role, $this->assignable_role_keys())) {
             $this->json_error('Please choose a valid role.');
         }
         $send_email = !empty($_POST['send_email']) && $_POST['send_email'] !== '0';
@@ -4570,13 +4572,36 @@ class Anchor_Private_File_Manager {
         if (!current_user_can('administrator')) $this->json_error('Forbidden', 403);
     }
 
+    /** Role keys whose capabilities make their holders staff (see Anchor_FM_User_Admin::STAFF_CAPABILITIES). */
+    private function staff_role_keys() {
+        $keys = [];
+        foreach ((array) wp_roles()->roles as $key => $meta) {
+            $caps = isset($meta['capabilities']) ? (array) $meta['capabilities'] : [];
+            if (Anchor_FM_User_Admin::is_staff_capabilities($caps)) $keys[] = (string) $key;
+        }
+        return $keys;
+    }
+
+    /**
+     * Roles the Users tab may assign: every non-administrator role minus
+     * staff roles. Folder Permissions still offer all roles; only user
+     * management is limited, so the portal can never make someone an editor.
+     */
+    private function user_role_options() {
+        $staff = $this->staff_role_keys();
+        return array_values(array_filter($this->get_editable_roles_for_permissions(), function ($r) use ($staff) {
+            return !in_array($r['key'], $staff, true);
+        }));
+    }
+
     private function assignable_role_keys() {
-        return array_column($this->get_editable_roles_for_permissions(), 'key');
+        return array_column($this->user_role_options(), 'key');
     }
 
     private function user_is_manageable(WP_User $u) {
         return Anchor_FM_User_Admin::is_manageable((array) $u->roles, (int) $u->ID, get_current_user_id())
-            && !user_can($u, 'administrator');
+            && !user_can($u, 'administrator')
+            && !Anchor_FM_User_Admin::is_staff_capabilities((array) $u->allcaps);
     }
 
     /** The posted user_id as a WP_User the current admin may act on, or a 403/404. */
@@ -4635,6 +4660,10 @@ class Anchor_Private_File_Manager {
         if ($role !== '' && in_array($role, $this->assignable_role_keys(), true)) {
             $args['role'] = $role;
         }
+        // Staff (administrators, editors, authors, shop managers, …) are
+        // managed in wp-admin; the portal list is for portal users only.
+        $staff = $this->staff_role_keys();
+        if ($staff) $args['role__not_in'] = $staff;
 
         $q = new WP_User_Query($args);
         $users = (array) $q->get_results();
@@ -4758,7 +4787,11 @@ class Anchor_Private_File_Manager {
                 'users' => $this->role_user_count($key),
             ];
         }
-        return ['roles' => $this->get_editable_roles_for_permissions(), 'portalRoles' => $portal];
+        return [
+            'roles' => $this->get_editable_roles_for_permissions(),
+            'userRoles' => $this->user_role_options(),
+            'portalRoles' => $portal,
+        ];
     }
 
     /** The posted role key, if it is one the portal created; otherwise a 403/404. */
