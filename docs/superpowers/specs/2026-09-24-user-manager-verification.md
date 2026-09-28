@@ -42,3 +42,9 @@ Run on a staging copy with the plugin updated from 2.14.x, logged in as an admin
 - [ ] AFM-05: two folders each containing "fixture.pdf" with different contents; move one into the other → both files still open with their own contents (one is stored as fixture-1.pdf).
 - [ ] AFM-06: a text file renamed to .pdf is rejected on upload; real PDFs, DOCX, JPG, MP4 still upload.
 - [ ] Existing data: review products' attached documents (Product Docs tab) and folder rules for anything unexpected granted before this release.
+
+## Staff stay in wp-admin (2.16.2)
+- [ ] Users tab lists no administrators, editors, authors, contributors or shop managers — only portal users (subscribers, customers, roles made in the Roles popup).
+- [ ] Add person / Import CSV / Change role / the role filter offer no staff roles.
+- [ ] Posting anchor_fm_user_set_role with role=editor (or any staff role) is refused; acting on a staff account's user_id (set password, reset, delete) returns 403.
+- [ ] A folder's Permissions popup still lists every role, including Editor.

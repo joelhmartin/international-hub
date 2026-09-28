@@ -40,6 +40,22 @@ class Anchor_FM_User_Admin {
         return in_array($role, $valid_keys, true);
     }
 
+    /**
+     * Capabilities that make an account staff rather than a portal user:
+     * editing content, managing users, running the shop, changing settings.
+     * Staff are managed in wp-admin only — never listed, assigned, reset or
+     * removed from the front-end Users tab.
+     */
+    const STAFF_CAPABILITIES = ['manage_options', 'edit_posts', 'list_users', 'edit_users', 'manage_woocommerce'];
+
+    /** Whether a role's or user's capability map (cap => bool) is staff-level. */
+    public static function is_staff_capabilities(array $caps) {
+        foreach (self::STAFF_CAPABILITIES as $cap) {
+            if (!empty($caps[$cap])) return true;
+        }
+        return false;
+    }
+
     /** WordPress core and WooCommerce roles: never created, renamed or deleted from the portal. */
     const RESERVED_ROLE_KEYS = ['administrator', 'editor', 'author', 'contributor', 'subscriber', 'customer', 'shop_manager'];
     const MAX_ROLE_NAME_LENGTH = 60;

@@ -5,6 +5,10 @@
  * file-manager.js's modal and helpers through window.AnchorFMUI rather than
  * carrying copies.
  *
+ * AnchorFM.userRoles is what this tab may assign (no staff roles — those stay
+ * in wp-admin); AnchorFM.roles is every role, used for labels here and by
+ * file-manager.js's folder permissions.
+ *
  * AnchorFM.roles is the page's one role list: file-manager.js's permission
  * pickers read it live, so role changes update it in place (never reassign)
  * and every dropdown offers the change immediately.
@@ -18,12 +22,14 @@ jQuery(function ($) {
     const { api, esc, toast, errMessage, modal } = UI;
     if (!Array.isArray(AnchorFM.roles)) AnchorFM.roles = [];
     const roles = AnchorFM.roles;
+    if (!Array.isArray(AnchorFM.userRoles)) AnchorFM.userRoles = [];
+    const userRoles = AnchorFM.userRoles;
     const roleLabel = key => (roles.find(r => r.key === key) || {}).label || key;
     const st = { search: '', role: '', page: 1, pages: 1, loaded: false, users: [], seq: 0, total: 0 };
     let searchTimer = null;
 
     function roleOptions(selected) {
-        return roles.map(r => `<option value="${esc(r.key)}"${r.key === selected ? ' selected' : ''}>${esc(r.label)}</option>`).join('');
+        return userRoles.map(r => `<option value="${esc(r.key)}"${r.key === selected ? ' selected' : ''}>${esc(r.label)}</option>`).join('');
     }
 
     /** Role picker used by every popup, with an inline "New role" that selects what it creates. */
@@ -47,7 +53,8 @@ jQuery(function ($) {
     function applyRoles(data) {
         if (!data || !Array.isArray(data.roles)) return;
         roles.splice(0, roles.length, ...data.roles);
-        const keys = roles.map(r => r.key);
+        if (Array.isArray(data.userRoles)) userRoles.splice(0, userRoles.length, ...data.userRoles);
+        const keys = userRoles.map(r => r.key);
 
         const $filter = $panel.find('[data-afm-users-role]');
         const filterGone = st.role && keys.indexOf(st.role) === -1;
@@ -57,7 +64,7 @@ jQuery(function ($) {
         $root.find('[data-um-role]').each(function () {
             const v = String($(this).val() || '');
             $(this).html(roleOptions(v));
-            if (keys.indexOf(v) === -1 && roles.length) $(this).val(roles[0].key);
+            if (keys.indexOf(v) === -1 && userRoles.length) $(this).val(userRoles[0].key);
         });
         if (!filterGone && st.users.length) renderTable(st.total);
         if (Array.isArray(data.portalRoles)) renderRolesBody(data.portalRoles);
@@ -234,7 +241,7 @@ jQuery(function ($) {
     // --- Row actions ---
     function openRole(u) {
         const userRoles = u.roles || [];
-        const roleKeys = roles.map(r => r.key);
+        const roleKeys = userRoles.map(r => r.key);
         const preselect = userRoles.find(r => roleKeys.indexOf(r) !== -1) || userRoles[0] || '';
         const currentLine = userRoles.length > 1
             ? `<div class="afm__help">Currently: ${esc(userRoles.map(roleLabel).join(', '))}. Saving replaces all of them with the role you pick.</div>`
