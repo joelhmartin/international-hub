@@ -430,8 +430,8 @@ jQuery(function ($) {
                     ${(typeof item.watchPercent === 'number') ? watchRing(item.watchPercent) : ''}
                 </div>
                 <div class="afm__rowCell afm__rowKind">${esc(kindLabel(item.kind, item.mime))}</div>
-                <div class="afm__rowCell afm__rowSize">${sizeText}</div>
-                <div class="afm__rowCell afm__rowModified">${modified}</div>
+                <div class="afm__rowCell afm__rowSize${sizeText === '—' ? ' is-empty' : ''}">${sizeText}</div>
+                <div class="afm__rowCell afm__rowModified${modified === '—' ? ' is-empty' : ''}">${modified}</div>
                 <div class="afm__rowCell afm__rowActions">
                     <button type="button" class="afm__kebab" data-afm-row-menu="${item.kind}:${item.id}"><span class="dashicons dashicons-ellipsis"></span></button>
                 </div>
@@ -2059,6 +2059,13 @@ jQuery(function ($) {
             onResize(e);
         });
     }
+
+    // Stacked (phone) layout only — the button is display:none on desktop.
+    $root.on('click', '[data-afm-tree-fold]', function () {
+        const open = !$root.hasClass('afm--treeOpen');
+        $root.toggleClass('afm--treeOpen', open);
+        $(this).attr('aria-expanded', open ? 'true' : 'false');
+    });
 
     $root.on('click', '[data-afm-tree-toggle]', function (e) {
         e.preventDefault();
