@@ -1489,7 +1489,7 @@
 .afm__vplayerFrame { width: 100%; }
 .afm__vhistory { margin-top: 12px; }
 .afm__vhistoryTable { display: flex; flex-direction: column; gap: 4px; }
-.afm__vhistoryRow { display: grid; grid-template-columns: minmax(0,1fr) 60px 70px 100px; gap: 8px; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--afm-border); }
+.afm__vhistoryRow { display: grid; grid-template-columns: minmax(0,1fr) 44px 56px 84px; gap: 8px; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--afm-border); }
 .afm__vhName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .afm__vhPct { font-weight: 700; color: var(--afm-accent); }
 
@@ -1585,6 +1585,7 @@
 .afm__viewerVideo {
     display: block;
     width: 100%;
+    height: auto;
     max-height: 70vh;
     background: #000;
 }
@@ -1815,9 +1816,18 @@
     padding: 10px 0;
   }
 
+  /* The desktop indent is 20px a level, which on a phone leaves a file six
+     folders deep about 70px for its name. Here a level is 8px and the indent
+     stops growing after six, so deep rows stay readable; past that depth the
+     breadcrumb trail is what says where you are. */
+  .afm__row {
+    --afm-row-indent: calc(4px + min(var(--afm-depth, 0), 6) * 8px);
+  }
+
   .afm__row .afm__rowName {
     grid-column: 1 / 5;
     grid-row: 1;
+    padding-left: var(--afm-row-indent);
   }
 
   /* Two lines of name before truncating: on a narrow screen the start of a
@@ -1847,7 +1857,7 @@
   /* Indented to sit under the icon, past the disclosure arrow. */
   .afm__row .afm__rowKind {
     grid-column: 1;
-    padding-left: calc(var(--afm-row-pad, 12px) + 26px);
+    padding-left: calc(var(--afm-row-indent) + 26px);
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -1879,7 +1889,7 @@
   }
 
   .afm__row .afm__rowPath {
-    padding-left: calc(var(--afm-row-pad, 12px) + 26px);
+    padding-left: calc(var(--afm-row-indent) + 26px);
   }
 
   /* The header is no longer a set of column titles, so it becomes a sort bar. */
@@ -1909,10 +1919,88 @@
   }
 
   .afm__row--file .afm__rowSize {
-    padding-left: calc(var(--afm-row-pad, 12px) + 26px);
+    padding-left: calc(var(--afm-row-indent) + 26px);
   }
 
   .afm__row--file .afm__rowSize::before {
     content: none;
+  }
+}
+
+/* ---- Viewer on phones ---- */
+/* Full screen instead of a centred card: the card capped its body at 60vh and
+   then put a 70vh PDF frame inside it, so the document scrolled inside a box
+   that itself scrolled, and the details under it were out of reach. */
+@media (max-width: 640px) {
+  .afm__modalPanel--viewer {
+    inset: 0;
+    transform: none;
+    width: auto;
+    border: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .afm__modalPanel--viewer .afm__modalTitle {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .afm__modalPanel--viewer .afm__iconBtn {
+    flex: none;
+    width: 40px;
+    height: 40px;
+  }
+
+  .afm__modalPanel--viewer .afm__modalBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    padding: 12px;
+  }
+
+  .afm__modalPanel--viewer .afm__viewer {
+    min-height: 100%;
+  }
+
+  /* The PDF takes whatever height the screen has left. */
+  .afm__modalPanel--viewer .afm__viewerStage:has(> .afm__viewerPdf) {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: stretch;
+    min-height: 320px;
+  }
+
+  .afm__modalPanel--viewer .afm__viewerPdf {
+    flex: 1 1 auto;
+    height: auto;
+  }
+
+  .afm__modalPanel--viewer .afm__viewerImg,
+  .afm__modalPanel--viewer .afm__viewerVideo {
+    max-height: 60vh;
+  }
+
+  .afm__modalPanel--viewer .afm__metaVal {
+    max-width: 62%;
+  }
+
+  .afm__modalPanel--viewer .afm__modalFooter {
+    flex: none;
+    padding: 10px 12px;
+  }
+
+  .afm__viewerFooter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 }
