@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Anchor Private File Manager
  * Description: Secure, modern private file manager with folders, role permissions, previews, and logging.
- * Version: 2.16.2
+ * Version: 2.16.3
  * Author: Anchor Corps
  */
 
@@ -22,7 +22,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-afm-upload-types.php';
 
 class Anchor_Private_File_Manager {
 
-    const VERSION = '2.16.2';
+    const VERSION = '2.16.3';
     const NONCE_ACTION = 'anchor_fm_nonce';
     const COPY_MAX_NODES = 2000;
     const COPY_MAX_DEPTH = 50;
@@ -1051,6 +1051,11 @@ class Anchor_Private_File_Manager {
                             <?php esc_html_e('Log out', 'anchor-private-file-manager'); ?>
                         </a>
                     </nav>
+                    <button type="button" class="afm__treeFold" data-afm-tree-fold aria-expanded="false">
+                        <span class="dashicons dashicons-category" aria-hidden="true"></span>
+                        <span class="afm__treeFoldLabel"><?php esc_html_e('Browse folders', 'anchor-private-file-manager'); ?></span>
+                        <span class="dashicons dashicons-arrow-down-alt2 afm__treeFoldChevron" aria-hidden="true"></span>
+                    </button>
                     <div class="afm__treeScroll">
                         <div class="afm__tree" data-afm-tree></div>
                     </div>
